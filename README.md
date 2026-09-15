@@ -4,8 +4,10 @@ Tools for working with [Snap2HTML](http://www.rlvision.com) folder-snapshot file
 
 - `template.html` — the Snap2HTML 2.5 output template (reference for the
   current file format).
-- `shows/` — sample snapshots (Snap2HTML 2.0 format) of `E:\shows`, split into
-  `shows-A_R.html` and `shows-S_Z.html`, plus the merged `shows-A_Z.html`.
+- `shows/` — sample snapshots of `E:\shows`: `shows-A_R.html` and
+  `shows-S_Z.html` (Snap2HTML 2.0 format) plus the merged `shows-A_Z.html`;
+  `shows-A_2_R.html` and `shows-S_2_Z.html` (Snap2HTML 2.52 format, of
+  `E:\shows` and `H:\shows`) plus the merged multi-root `shows-A_2_Z.html`.
 
 ## Snapshot formats
 
