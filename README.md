@@ -34,3 +34,29 @@ What it does:
   provenance comment)
 - validates every input and re-parses the output before writing, verifying
   folder reachability, reference consistency and all counters
+
+## merge_snap2html.ps1 (PowerShell port)
+
+`merge_snap2html.ps1` is a function-for-function port of the Python script
+(Windows PowerShell 5.1 and PowerShell 7+ compatible) and produces the same
+output:
+
+```powershell
+.\merge_snap2html.ps1 shows\shows-A_R.html shows\shows-S_Z.html -OutputFile shows\shows-A_Z.html
+```
+
+If script execution is blocked by policy:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\merge_snap2html.ps1 shows\shows-A_R.html shows\shows-S_Z.html -o shows\shows-A_Z.html
+```
+
+Run both implementations on the same inputs to cross-validate — the outputs
+are byte-identical except for the `<!-- Merged from ... -->` provenance
+comment, which names the script that produced it:
+
+```powershell
+python merge_snap2html.py  -o shows-A_Z_py.html  shows\shows-A_R.html shows\shows-S_Z.html
+.\merge_snap2html.ps1      -o shows-A_Z_ps.html shows\shows-A_R.html shows\shows-S_Z.html
+Compare-Object (Get-Content shows-A_Z_py.html) (Get-Content shows-A_Z_ps.html)
+```
