@@ -60,4 +60,3 @@ python merge_snap2html.py  -o shows-A_Z_py.html  shows\shows-A_R.html shows\show
 .\merge_snap2html.ps1      -o shows-A_Z_ps.html shows\shows-A_R.html shows\shows-S_Z.html
 Compare-Object (Get-Content shows-A_Z_py.html) (Get-Content shows-A_Z_ps.html)
 ```
-
