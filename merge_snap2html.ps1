@@ -48,6 +48,10 @@
         header stats are recomputed.
       * Different root folders (V2 only): the snapshots are combined into one
         multi-root snapshot, a capability the V2 format supports natively.
+        The viewer renders such a snapshot under a synthetic parent node
+        labelled with the snapshot title, so merging two folders that share a
+        name (say E:\shows and H:\shows) displays that name twice - use
+        -FlattenRoot.
       * Subfolder references of merged folders are sorted by folder name
         using a natural sort ("2" before "10", case-insensitive), matching
         Snap2HTML's own output order (disable with -KeepOrder).
@@ -57,6 +61,23 @@
         present, is preserved)
       * every input is validated and the output is re-parsed and verified
         before the script reports success
+
+    Options:
+
+      * -FlattenRoot (V2 only) folds every root folder of every input into
+        ONE root, so the result is a plain single-root listing instead of a
+        multi-root snapshot. Folders are matched by their path relative to
+        their original root, so identically named folders coming from
+        different roots are merged (file lists unioned, sizes recomputed).
+        The surviving root is named after -Title, or after the first
+        snapshot's root folder when no title is given. When the inputs
+        disagree about the root's sourceDir or linkRoot, the root is re-based
+        on that name and file linking is turned off, because a single root
+        can only carry one link root.
+      * -Title TEXT replaces the page title everywhere it is shown: the
+        <title> tag, the <h1> heading, window.snap.title and every root's
+        metadata "title". Use it to drop the generator's "Snapshot of D:\..."
+        wording.
 
     This is a port of merge_snap2html.py and produces byte-identical output.
 
@@ -72,6 +93,13 @@
 
     Merges three snapshots, keeping raw snapshot order in folder listings.
 
+.EXAMPLE
+    PS> .\merge_snap2html.ps1 shows\shows-A_2_R.html shows\shows-S_2_Z.html -FlattenRoot -Title Shows -o shows\shows-A_2_Z.html
+
+    Folds the E:\shows and H:\shows snapshots into a single root folder
+    called "Shows", titled "Shows", instead of a two-root listing that shows
+    "shows" twice under a synthetic "Snapshot of E:\shows" parent.
+
 .NOTES
     If script execution is blocked by policy, run it with:
     powershell -ExecutionPolicy Bypass -File .\merge_snap2html.ps1 ...
@@ -85,10 +113,20 @@ param(
     [string]$OutputFile = 'merged.html',
 
     [Parameter()]
-    [switch]$KeepOrder
+    [switch]$KeepOrder,
+
+    [Parameter()]
+    [switch]$FlattenRoot,
+
+    [Parameter()]
+    [object]$Title = $null
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Distinguish "no -Title given" from an empty title string.
+$script:HasTitle = ($null -ne $Title)
+if ($script:HasTitle) { $Title = [string]$Title }
 
 $script:MarkerStart = 'Array.prototype.p = Array.prototype.push;'
 $script:MarkerEnd   = 'delete(Array.prototype.p)'
@@ -1153,6 +1191,181 @@ function Get-V2Subtree {
     return $out
 }
 
+function Update-V2Paths {
+    # Fill in every entry's relative path, assuming the root entry's Path is
+    # already set (unlike Set-V2Paths, which re-reads the meta sourceDir).
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[object]]$Entries,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    for ($pass = 0; $pass -le $Entries.Count; $pass++) {
+        $missing = 0
+        foreach ($e in $Entries) {
+            if ($null -ne $e.Path) { continue }
+            $pp = $Entries[$e.Parent].Path
+            if ($null -eq $pp) { $missing++; continue }
+            if ($pp.EndsWith('\')) { $e.Path = $pp + $e.Name }
+            else                   { $e.Path = $pp + '\' + $e.Name }
+        }
+        if ($missing -eq 0) { return }
+    }
+    throw ('{0}: could not re-base the merged folder paths' -f $Path)
+}
+
+function Set-V2MetaString {
+    # Set one string-valued key of a root entry: the metadata object and the
+    # serialized metadata text, preserving the rest of the text.
+    param(
+        [Parameter(Mandatory = $true)][object]$Entry,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $rx = [regex]::new(('("{0}"\s*:\s*)"(?:[^"\\]|\\.)*"' -f [regex]::Escape($Key)))
+    if (($rx.Matches($Entry.MetaText)).Count -lt 1) {
+        throw ('{0}: root metadata object does not contain ''{1}''' -f $Path, $Key)
+    }
+    # '$' is special in .NET regex replacement strings
+    $safe = (Get-JsonString -Value $Value).Replace('$', '$$')
+    $Entry.MetaText = $rx.Replace($Entry.MetaText, ('${1}' + $safe), 1)
+    $Entry.MetaObj.$Key = $Value
+    # Guard against a pathological value containing e.g. "sourceDir"."x" -
+    # the patched object must still round-trip to the expected value.
+    $obj = ConvertFrom-Json -InputObject $Entry.MetaText
+    if ([string]$obj.$Key -ne $Value) {
+        throw ('{0}: could not set ''{1}'' in the root metadata safely' -f $Path, $Key)
+    }
+}
+
+function Merge-V2RootFolders {
+    # Fold every root folder of every snapshot onto a single root named
+    # $Label, returning new snapshots ready for the normal merge.
+    # Folders are re-based on their path relative to their own root, so
+    # identically named folders coming from different roots merge; a single
+    # root can only carry one sourceDir/linkRoot, so when the inputs disagree
+    # the root is re-based on $Label and file linking is switched off.
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Snapshots,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $rootMetas = New-Object System.Collections.Generic.List[object]
+    foreach ($s in $Snapshots) {
+        foreach ($e in $s.Entries) {
+            if ($e.Parent -eq -1) { $rootMetas.Add($e.MetaObj) }
+        }
+    }
+    if ($rootMetas.Count -eq 0) {
+        throw ('{0}: no root folder found to flatten' -f $Snapshots[0].Path)
+    }
+    $dirs = New-Object System.Collections.Generic.HashSet[string]
+    $links = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($m in $rootMetas) {
+        [void]$dirs.Add(([string]$m.sourceDir).ToLowerInvariant())
+        [void]$links.Add(([string]$m.linkRoot).ToLowerInvariant())
+    }
+    $rebased = ($dirs.Count -ne 1 -or $links.Count -ne 1)
+
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($s in $Snapshots) {
+        $entries = $s.Entries
+        $roots = New-Object System.Collections.Generic.List[int]
+        for ($i = 0; $i -lt $entries.Count; $i++) {
+            if ($entries[$i].Parent -eq -1) { $roots.Add($i) }
+        }
+        $primary = $roots[0]
+        $prim = $entries[$primary]
+
+        for ($r = 1; $r -lt $roots.Count; $r++) {
+            $src = $entries[$roots[$r]]
+            foreach ($c in $src.Refs) { $entries[$c].Parent = $primary }
+            $have = New-Object System.Collections.Generic.HashSet[string]
+            foreach ($f in $prim.Files) { [void]$have.Add(([string]$f[0]).ToLowerInvariant()) }
+            foreach ($f in $src.Files) {
+                if (-not $have.Contains(([string]$f[0]).ToLowerInvariant())) { $prim.Files.Add($f) }
+            }
+            $haveRef = New-Object System.Collections.Generic.HashSet[int]
+            $union = New-Object System.Collections.Generic.List[int]
+            foreach ($c in $prim.Refs) { [void]$haveRef.Add([int]$c); $union.Add([int]$c) }
+            foreach ($c in $src.Refs) {
+                if (-not $haveRef.Contains([int]$c)) { [void]$haveRef.Add([int]$c); $union.Add([int]$c) }
+            }
+            $prim.Refs = $union.ToArray()
+        }
+
+        # Drop every root but the primary one and remap all ids.
+        $drop = New-Object System.Collections.Generic.HashSet[int]
+        for ($r = 1; $r -lt $roots.Count; $r++) { [void]$drop.Add($roots[$r]) }
+        $keep = New-Object System.Collections.Generic.List[int]
+        $keep.Add($primary)
+        for ($i = 0; $i -lt $entries.Count; $i++) {
+            if ($i -ne $primary -and -not $drop.Contains($i)) { $keep.Add($i) }
+        }
+        $remap = @{}
+        for ($new = 0; $new -lt $keep.Count; $new++) { $remap[$keep[$new]] = $new }
+
+        $folded = New-Object System.Collections.Generic.List[object]
+        $numFiles = [long]0
+        $totalBytes = [long]0
+        foreach ($old in $keep) {
+            $e = $entries[$old]
+            $refs = [int[]]::new($e.Refs.Count)
+            for ($k = 0; $k -lt $e.Refs.Count; $k++) { $refs[$k] = $remap[$e.Refs[$k]] }
+            $files = New-Object System.Collections.Generic.List[object]
+            $files.AddRange($e.Files)
+            foreach ($f in $files) { $totalBytes += [long]$f[1] }
+            $numFiles += $files.Count
+            $parent = $e.Parent
+            if ($parent -ne -1) { $parent = $remap[$parent] }
+            $folded.Add([pscustomobject]@{
+                Name     = $e.Name
+                Size     = $e.Size
+                Ts       = $e.Ts
+                Parent   = $parent
+                Refs     = $refs
+                Files    = $files
+                MetaObj  = $e.MetaObj
+                MetaText = $e.MetaText
+                Path     = $null
+                Dirty    = $false
+                Owner    = -1
+                Deep     = [long]0
+            })
+        }
+
+        $root = $folded[0]
+        $root.Name = $Label
+        $base = [string]$root.MetaObj.sourceDir
+        if ($rebased) {
+            $base = $Label
+            Set-V2MetaString -Entry $root -Key 'sourceDir' -Value $Label -Path $s.Path
+            Set-V2MetaString -Entry $root -Key 'linkRoot' -Value '' -Path $s.Path
+        }
+        $root.Path = $base
+        Update-V2Paths -Entries $folded -Path $s.Path
+
+        $out.Add([pscustomobject]@{
+            Path       = $s.Path
+            Text       = $s.Text
+            Entries    = $folded
+            Roots      = @(0)
+            NumFiles   = $numFiles
+            NumDirs    = $folded.Count
+            TotalBytes = $totalBytes
+            Header     = $s.Header
+            Stats      = $s.Stats
+        })
+    }
+
+    if ($rebased) {
+        [Console]::Error::WriteLine((
+            'NOTE: -FlattenRoot: the inputs come from different root folders; ' +
+            'the merged root is named ''{0}'' and file linking is disabled ' +
+            '(a single root can only carry one link root)' -f $Label))
+    }
+    return $out
+}
+
 function Merge-SnapshotsV2 {
     # Merge multiple V2 snapshots into one. Returns @{ Entries; Info }.
     # Works for same-root deep merges as well as multi-root combinations.
@@ -1405,12 +1618,58 @@ function Update-V2MetaText {
 # Rendering
 # ---------------------------------------------------------------------------
 
+function Get-TitleHtml {
+    # HTML-escape a title for <title>/<h1>, inserting a <wbr> break after path
+    # separators the way the Snap2HTML generator does.
+    param([Parameter(Mandatory = $true)][string]$Title)
+    $esc = $Title.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;')
+    return [regex]::Replace($esc, '([\\/])', '$1<wbr>')
+}
+
+function Update-PageTitle {
+    # Replace the page title everywhere it is shown (V1 and V2).
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $html = Get-TitleHtml -Title $Title
+
+    $rxTitle = [regex]'<title>.*?</title>'
+    if (($rxTitle.Matches($Text)).Count -ne 1) {
+        throw ('{0}: could not find the <title> tag to replace' -f $Path)
+    }
+    $Text = $rxTitle.Replace($Text, ('<title>' + $html + '</title>'), 1)
+
+    $rxH1 = [regex]'<h1>.*?</h1>'
+    if (($rxH1.Matches($Text)).Count -ne 1) {
+        throw ('{0}: could not find the <h1> heading to replace' -f $Path)
+    }
+    $Text = $rxH1.Replace($Text, ('<h1>' + $html + '</h1>'), 1)
+
+    if ($Text.Contains($script:V2SnapMetaStart) -and $Text.Contains($script:V2SnapMetaEnd)) {
+        $m0 = $Text.IndexOf($script:V2SnapMetaStart, [System.StringComparison]::Ordinal)
+        $m1 = $Text.IndexOf($script:V2SnapMetaEnd, [System.StringComparison]::Ordinal)
+        $block = $Text.Substring($m0, ($m1 - $m0))
+        $rxT = [regex]'(?m)^(\s*title\s*:\s*)"(?:[^"\\]|\\.)*"'
+        if (($rxT.Matches($block)).Count -ne 1) {
+            throw ('{0}: could not find the title in the [SNAPMETA] block' -f $Path)
+        }
+        # '$' is special in .NET regex replacement strings
+        $safe = (Get-JsonString -Value $Title).Replace('$', '$$')
+        $block = $rxT.Replace($block, ('${1}' + $safe), 1)
+        $Text = $Text.Substring(0, $m0) + $block + $Text.Substring($m1)
+    }
+    return $Text
+}
+
 function New-MergedHtml {
     # Produce the output HTML from the base file's text and the merged data.
     param(
         [Parameter(Mandatory = $true)]$BaseSnapshot,
         [Parameter(Mandatory = $true)][System.Collections.Generic.List[object]]$MergedDirs,
-        [Parameter(Mandatory = $true)][string[]]$InputNames
+        [Parameter(Mandatory = $true)][string[]]$InputNames,
+        [Parameter()][string]$Title
     )
 
     $text = $BaseSnapshot.Text
@@ -1472,7 +1731,12 @@ function New-MergedHtml {
     $statsRepl = '>{0} files in {1} folders (<span id="tot_size">{2}</span>)' -f $nFiles, $nDirs, $nBytes
     $text = $rx2.Replace($text, $statsRepl, 1)
 
-    # --- 3. add a provenance comment next to the original one --------------
+    # --- 3. replace the page title when one was requested ------------------
+    if ($PSBoundParameters.ContainsKey('Title')) {
+        $text = Update-PageTitle -Text $text -Title $Title -Path $BaseSnapshot.Path
+    }
+
+    # --- 4. add a provenance comment next to the original one --------------
     $today = (Get-Date).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
     $note = '<!-- Merged from {0} snapshots ({1}) using merge_snap2html.ps1 on {2} -->' -f `
         $InputNames.Count, ($InputNames -join ', '), $today
@@ -1579,7 +1843,8 @@ function New-MergedHtmlV2 {
         [Parameter(Mandatory = $true)]$BaseSnapshot,
         [Parameter(Mandatory = $true)]$Entries,
         [Parameter(Mandatory = $true)][hashtable]$Info,
-        [Parameter(Mandatory = $true)][string[]]$InputNames
+        [Parameter(Mandatory = $true)][string[]]$InputNames,
+        [Parameter()][string]$Title
     )
 
     $text = $BaseSnapshot.Text
@@ -1662,7 +1927,12 @@ function New-MergedHtmlV2 {
         $Info.NumFiles, $Info.NumDirs, $tot
     $text = $rx2.Replace($text, $statsRepl, 1)
 
-    # --- 4. add a provenance comment next to the original one ---------------
+    # --- 4. replace the page title when one was requested ------------------
+    if ($PSBoundParameters.ContainsKey('Title')) {
+        $text = Update-PageTitle -Text $text -Title $Title -Path $BaseSnapshot.Path
+    }
+
+    # --- 5. add a provenance comment next to the original one ---------------
     $today = (Get-Date).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
     $note = '<!-- Merged from {0} snapshots ({1}) using merge_snap2html.ps1 on {2} -->' -f `
         $InputNames.Count, ($InputNames -join ', '), $today
@@ -1763,6 +2033,10 @@ try {
 
     if ($formats[0] -eq 'V1') {
         # ---------------- V1 (Snap2HTML 2.0-2.14) ----------------
+        if ($FlattenRoot) {
+            throw ('-FlattenRoot is only supported for the Snap2HTML 2.5+ (V2) data format; V1 snapshots always describe a single root folder')
+        }
+
         $snapshots = @()
         foreach ($p in $InputFiles) {
             $snapshots += @(ConvertFrom-Snapshot -Path $p)
@@ -1786,7 +2060,13 @@ try {
         $merged = Merge-Snapshots -Snapshots $snapshots -KeepOrder:$KeepOrder
 
         $inputNames = @($InputFiles | ForEach-Object { Split-Path -Leaf $_ })
-        $outputText = New-MergedHtml -BaseSnapshot $snapshots[0] -MergedDirs $merged -InputNames $inputNames
+        $renderArgs = @{
+            BaseSnapshot = $snapshots[0]
+            MergedDirs   = $merged
+            InputNames   = $inputNames
+        }
+        if ($script:HasTitle) { $renderArgs['Title'] = $Title }
+        $outputText = New-MergedHtml @renderArgs
 
         $fullOut = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputFile)
         $outDir = Split-Path -Parent $fullOut
@@ -1835,6 +2115,27 @@ try {
             $snapshots += @(ConvertFrom-SnapshotV2 -Path $r.Path -Text $r.Text)
         }
 
+        # Apply the requested title to every root before merging, so the root
+        # metadata and the folded root already agree on it.
+        if ($script:HasTitle) {
+            foreach ($s in $snapshots) {
+                foreach ($e in $s.Entries) {
+                    if ($e.Parent -eq -1) {
+                        Set-V2MetaString -Entry $e -Key 'title' -Value $Title -Path $s.Path
+                    }
+                }
+            }
+        }
+
+        if ($FlattenRoot) {
+            $firstRoot = $null
+            foreach ($e in $snapshots[0].Entries) {
+                if ($e.Parent -eq -1) { $firstRoot = $e; break }
+            }
+            if ($script:HasTitle) { $label = $Title } else { $label = [string]$firstRoot.Name }
+            $snapshots = @(Merge-V2RootFolders -Snapshots $snapshots -Label $label)
+        }
+
         # For roots that also exist in the first snapshot, the link setup
         # and title should agree; otherwise keep the first snapshot's.
         $baseRootMeta = @{}
@@ -1862,7 +2163,14 @@ try {
         $mergedResult = Merge-SnapshotsV2 -Snapshots $snapshots -KeepOrder:$KeepOrder
 
         $inputNames = @($InputFiles | ForEach-Object { Split-Path -Leaf $_ })
-        $outputText = New-MergedHtmlV2 -BaseSnapshot $snapshots[0] -Entries $mergedResult.Entries -Info $mergedResult.Info -InputNames $inputNames
+        $renderArgs = @{
+            BaseSnapshot = $snapshots[0]
+            Entries      = $mergedResult.Entries
+            Info         = $mergedResult.Info
+            InputNames   = $inputNames
+        }
+        if ($script:HasTitle) { $renderArgs['Title'] = $Title }
+        $outputText = New-MergedHtmlV2 @renderArgs
 
         $fullOut = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputFile)
         $outDir = Split-Path -Parent $fullOut

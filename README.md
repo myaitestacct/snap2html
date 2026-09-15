@@ -7,7 +7,8 @@ Tools for working with [Snap2HTML](http://www.rlvision.com) folder-snapshot file
 - `shows/` — sample snapshots of `E:\shows`: `shows-A_R.html` and
   `shows-S_Z.html` (Snap2HTML 2.0 format) plus the merged `shows-A_Z.html`;
   `shows-A_2_R.html` and `shows-S_2_Z.html` (Snap2HTML 2.52 format, of
-  `E:\shows` and `H:\shows`) plus the merged multi-root `shows-A_2_Z.html`.
+  `E:\shows` and `H:\shows`) plus the merged `shows-A_2_Z.html`, which folds
+  both drives into one root titled `Shows` (`--flatten-root --title Shows`).
 
 ## Snapshot formats
 
@@ -41,6 +42,10 @@ python3 merge_snap2html.py -o combined.html e_drive.html f_drive.html
 
 # keep raw snapshot order in folder listings instead of re-sorting
 python3 merge_snap2html.py --keep-order -o out.html a.html b.html
+
+# fold every root into one root and retitle the page (V2 only)
+python3 merge_snap2html.py --flatten-root --title Shows \
+    -o shows/shows-A_2_Z.html shows/shows-A_2_R.html shows/shows-S_2_Z.html
 ```
 
 What it does:
@@ -57,6 +62,23 @@ What it does:
   each root keeps its own metadata object and per-root counters. If the
   natural output order would need negative root-relative ids, the entries are
   re-grouped per root subtree and all ids are remapped.
+- **`--flatten-root`** (V2 only) folds every root folder of every input into
+  a *single* root instead of a multi-root snapshot. Folders are matched by
+  their path **relative** to their original root, so identically named folders
+  coming from different roots are merged (file lists unioned by name, sizes
+  recomputed). The surviving root is named after `--title`, or after the first
+  snapshot's root folder when no title is given. This is the fix for the
+  case where merging `E:\shows` and `H:\shows` shows the name "shows" twice:
+  the viewer has to render a multi-root snapshot under a synthetic parent node
+  labelled with the snapshot title (`Snapshot of E:\shows`), so both roots
+  named `shows` appear underneath it. Flattening produces a plain single-root
+  listing instead — one root, all folders directly beneath it. Because a
+  single root can only carry one `sourceDir`/`linkRoot`, when the inputs
+  disagree the root is re-based on the new name and file linking is switched
+  off (a NOTE on stderr says so).
+- **`--title TEXT`** replaces the page title everywhere it is shown: the
+  `<title>` tag, the `<h1>` heading, `window.snap.title` and every root's
+  metadata `title`. Works for both formats.
 - The output always uses the **first input's format**; the first input also
   serves as the template — everything outside the data block and the counters
   is preserved byte-for-byte (plus a `<!-- Merged from ... -->` provenance
@@ -74,13 +96,17 @@ What it does:
 
 `merge_snap2html.ps1` is a function-for-function port of the Python script
 (Windows PowerShell 5.1 and PowerShell 7+ compatible) with the same options
-(`-OutputFile`/`-o`, `-KeepOrder`) and the same behavior:
+(`-OutputFile`/`-o`, `-KeepOrder`, `-FlattenRoot`, `-Title`) and the same
+behavior:
 
 ```powershell
 .\merge_snap2html.ps1 shows\shows-A_R.html shows\shows-S_Z.html -OutputFile shows\shows-A_Z.html
 
 # multi-root (V2)
 .\merge_snap2html.ps1 e_drive.html f_drive.html -o combined.html
+
+# fold every root into one root and retitle the page (V2 only)
+.\merge_snap2html.ps1 shows\shows-A_2_R.html shows\shows-S_2_Z.html -FlattenRoot -Title Shows -o shows\shows-A_2_Z.html
 ```
 
 If script execution is blocked by policy:

@@ -55,9 +55,27 @@ Merging
   * Different root folders (V2 only): the snapshots are combined into one
     multi-root snapshot, a capability the V2 format supports natively. Each
     root keeps its own link root and metadata; the header shows grand totals.
+    The viewer renders such a snapshot under a synthetic parent node labelled
+    with the snapshot title, so merging two folders that share a name (say
+    E:\\shows and H:\\shows) displays that name twice - use --flatten-root.
   * Subfolder references of merged folders are sorted by folder name using a
     natural sort ("2" before "10", case-insensitive), matching Snap2HTML's
     own output order (disable with --keep-order).
+
+Options:
+  --flatten-root (V2 only) folds every root folder of every input into ONE
+    root, so the result is a plain single-root listing instead of a
+    multi-root snapshot. Folders are matched by their path relative to their
+    original root, so identically named folders coming from different roots
+    are merged (file lists unioned, sizes recomputed). The surviving root is
+    named after --title, or after the first snapshot's root folder when no
+    title is given. When the inputs disagree about the root's sourceDir or
+    linkRoot, the root is re-based on that name and file linking is turned
+    off, because a single root can only carry one link root.
+
+  --title TEXT replaces the page title everywhere it is shown: the <title>
+    tag, the <h1> heading, window.snap.title and every root's metadata
+    "title". Use it to drop the generator's "Snapshot of D:\\path" wording.
 
 The first input file is used as the template for the output; everything
 outside the data block and the counters is preserved byte-for-byte. The
@@ -69,6 +87,12 @@ Usage:
 Example:
     python3 merge_snap2html.py -o shows/shows-A_Z.html \\
         shows/shows-A_R.html shows/shows-S_Z.html
+
+    # Fold every root into a single root titled "Shows" (drops the
+    # generator's "Snapshot of ..." wrapper and the duplicate root names):
+    python3 merge_snap2html.py --flatten-root --title Shows \\
+        -o shows/shows-A_2_Z.html \\
+        shows/shows-A_2_R.html shows/shows-S_2_Z.html
 """
 
 from __future__ import annotations
@@ -358,7 +382,8 @@ def merge_v1_snapshots(snaps: list, sort_refs: bool = True) -> list:
     return merged
 
 
-def render_v1_output(base: Snapshot, merged: list, input_names: list) -> str:
+def render_v1_output(base: Snapshot, merged: list, input_names: list,
+                     title: str | None = None) -> str:
     """Produce the output HTML from the base file's text and the merged data."""
     text = base.text
 
@@ -400,7 +425,11 @@ def render_v1_output(base: Snapshot, merged: list, input_names: list) -> str:
     if n != 1:
         raise SnapshotError(f"{base.path}: header stats line not found")
 
-    # --- 3. add a provenance comment next to the original one --------------
+    # --- 3. replace the page title when one was requested ------------------
+    if title is not None:
+        text = _apply_title(text, title, base.path)
+
+    # --- 4. add a provenance comment next to the original one --------------
     return _add_provenance(text, input_names, line_term)
 
 
@@ -829,6 +858,144 @@ def parse_v2(path: Path, text: str) -> V2Snapshot:
     return snap
 
 
+def json_string_encode(s: str) -> str:
+    """Serialize a string as a JSON/JavaScript string literal, escaping only
+    what must be escaped - matches the PowerShell port's Get-JsonString."""
+    return json.dumps(s, ensure_ascii=False)
+
+
+def _title_html(title: str) -> str:
+    """HTML-escape a title for <title>/<h1>, inserting a <wbr> break after
+    path separators the way the Snap2HTML generator does."""
+    esc = (title.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;"))
+    return re.sub(r"([\\/])", r"\1<wbr>", esc)
+
+
+def _apply_title(text: str, title: str, path) -> str:
+    """Replace the page title everywhere it is shown (V1 and V2)."""
+    text, n = re.subn(r"<title>.*?</title>",
+                      lambda _: "<title>%s</title>" % _title_html(title),
+                      text, count=1)
+    _require(n == 1, path, "could not find the <title> tag to replace")
+    text, n = re.subn(r"<h1>.*?</h1>",
+                      lambda _: "<h1>%s</h1>" % _title_html(title),
+                      text, count=1)
+    _require(n == 1, path, "could not find the <h1> heading to replace")
+    if V2_SNAPMETA_START in text and V2_SNAPMETA_END in text:
+        m0 = text.index(V2_SNAPMETA_START)
+        m1 = text.index(V2_SNAPMETA_END)
+        block, n = re.subn(r'(?m)^(\s*title\s*:\s*)"(?:[^"\\]|\\.)*"',
+                           lambda m: m.group(1) + json_string_encode(title),
+                           text[m0:m1], count=1)
+        _require(n == 1, path,
+                 "could not find the title in the [SNAPMETA] block")
+        text = text[:m0] + block + text[m1:]
+    return text
+
+
+def _v2_patch_meta_string(meta_text: str, key: str, value: str, path) -> str:
+    """Replace one string-valued key inside a root metadata object,
+    preserving everything else (key order, escaping) byte-for-byte."""
+    rx = re.compile(r'("%s"\s*:\s*)"(?:[^"\\]|\\.)*"' % re.escape(key))
+    new_text, cnt = rx.subn(
+        lambda m: m.group(1) + json_string_encode(value), meta_text, count=1)
+    _require(cnt == 1, path,
+             f"root metadata object does not contain '{key}'")
+    # Guard against a pathological value containing e.g. "sourceDir"."x" -
+    # the patched object must still round-trip to the expected value.
+    _require(json.loads(new_text).get(key) == value, path,
+             f"could not set '{key}' in the root metadata safely")
+    return new_text
+
+
+def _v2_set_meta_string(entry: dict, key: str, value: str, path) -> None:
+    """Set one string-valued key of a root entry (object and raw JSON text)."""
+    entry["meta_obj"][key] = value
+    entry["meta_text"] = _v2_patch_meta_string(entry["meta_text"], key,
+                                               value, path)
+
+
+def _v2_propagate_paths(entries: list, path) -> None:
+    """Fill in every entry's relative path, assuming the root path is set."""
+    for _ in range(len(entries) + 1):
+        missing = [e for e in entries if e["path"] is None]
+        if not missing:
+            return
+        for e in missing:
+            parent_path = entries[e["parent"]]["path"]
+            if parent_path is not None:
+                e["path"] = (parent_path
+                             + ("" if parent_path.endswith("\\") else "\\")
+                             + e["name"])
+    raise SnapshotError(f"{path}: could not re-base the merged folder paths")
+
+
+def _v2_flatten_roots(snaps: list, label: str) -> list:
+    """Fold every root folder of every snapshot onto a single root named
+    `label`, returning new snapshots ready for the normal merge.
+
+    Folders are re-based on their path relative to their own root, so
+    identically named folders coming from different roots merge; a single
+    root can only carry one sourceDir/linkRoot, so when the inputs disagree
+    the root is re-based on `label` and file linking is switched off."""
+    root_metas = [e["meta_obj"] for s in snaps for e in s.entries
+                  if e["parent"] == -1]
+    _require(root_metas, snaps[0].path,
+             "no root folder found to flatten")
+    same_dir = len({m["sourceDir"].lower() for m in root_metas}) == 1
+    same_link = len({m["linkRoot"].lower() for m in root_metas}) == 1
+    rebased = not (same_dir and same_link)
+
+    out = []
+    for s in snaps:
+        entries = s.entries
+        roots = [i for i, e in enumerate(entries) if e["parent"] == -1]
+        primary = roots[0]
+        prim = entries[primary]
+        for r in roots[1:]:
+            src = entries[r]
+            for c in src["refs"]:
+                entries[c]["parent"] = primary
+            have = {f[0].lower() for f in prim["files"]}
+            prim["files"].extend(f for f in src["files"]
+                                 if f[0].lower() not in have)
+            have = set(prim["refs"])
+            prim["refs"].extend(c for c in src["refs"] if c not in have)
+
+        drop = set(roots[1:])
+        keep = [primary] + [i for i in range(len(entries))
+                            if i != primary and i not in drop]
+        remap = {old: new for new, old in enumerate(keep)}
+        folded = []
+        for old in keep:
+            e = dict(entries[old], files=list(entries[old]["files"]),
+                     refs=[remap[r] for r in entries[old]["refs"]])
+            if e["parent"] != -1:
+                e["parent"] = remap[e["parent"]]
+            folded.append(e)
+
+        root = folded[0]
+        root["name"] = label
+        base = root["meta_obj"]["sourceDir"]
+        if rebased:
+            base = label
+            _v2_set_meta_string(root, "sourceDir", label, s.path)
+            _v2_set_meta_string(root, "linkRoot", "", s.path)
+        for e in folded[1:]:
+            e["path"] = None
+        root["path"] = base
+        _v2_propagate_paths(folded, s.path)
+        out.append(V2Snapshot(s.path, s.text, folded, s.header, s.stats))
+
+    if rebased:
+        print(f"NOTE: --flatten-root: the inputs come from different root "
+              f"folders; the merged root is named {label!r} and file linking "
+              f"is disabled (a single root can only carry one link root)",
+              file=sys.stderr)
+    return out
+
+
 def merge_v2_snapshots(snaps: list, sort_refs: bool = True):
     """Merge multiple V2 snapshots into one. Returns (entries, info dict).
     Works for same-root deep merges as well as multi-root combinations."""
@@ -1048,7 +1215,7 @@ def _v2_grouped_order(entries: list) -> list:
 
 
 def render_v2_output(base: V2Snapshot, entries: list, input_names: list,
-                     info: dict) -> str:
+                     info: dict, title: str | None = None) -> str:
     """Produce the output HTML from the base file's text and the merged data."""
     text = base.text
 
@@ -1115,7 +1282,11 @@ def render_v2_output(base: V2Snapshot, entries: list, input_names: list,
     if cnt != 1:
         raise SnapshotError(f"{base.path}: header stats line not found")
 
-    # --- 4. add a provenance comment next to the original one ---------------
+    # --- 4. replace the page title when one was requested ------------------
+    if title is not None:
+        text = _apply_title(text, title, base.path)
+
+    # --- 5. add a provenance comment next to the original one ---------------
     return _add_provenance(text, input_names, term)
 
 
@@ -1207,6 +1378,14 @@ def main(argv=None) -> int:
     parser.add_argument("--keep-order", action="store_true",
                         help="keep snapshot order in folder listings instead "
                              "of sorting folders by name")
+    parser.add_argument("--flatten-root", action="store_true",
+                        help="fold every root folder of every input into a "
+                             "single root instead of producing a multi-root "
+                             "snapshot (Snap2HTML 2.5+ data format only)")
+    parser.add_argument("--title", metavar="TEXT",
+                        help="page title to use instead of the first "
+                             "snapshot's title; also names the root folder "
+                             "created by --flatten-root")
     args = parser.parse_args(argv)
 
     if len(args.inputs) < 2:
@@ -1223,6 +1402,12 @@ def main(argv=None) -> int:
         fmt = fmts.pop()
 
         if fmt == "V1":
+            if args.flatten_root:
+                raise SnapshotError(
+                    "--flatten-root is only supported for the Snap2HTML "
+                    "2.5+ (V2) data format; V1 snapshots always describe a "
+                    "single root folder")
+
             snaps = [parse_v1(p, t) for p, t in texts]
 
             for s in snaps[1:]:
@@ -1238,7 +1423,8 @@ def main(argv=None) -> int:
 
             merged = merge_v1_snapshots(snaps, sort_refs=not args.keep_order)
             output_text = render_v1_output(snaps[0], merged,
-                                           [p.name for p in args.inputs])
+                                           [p.name for p in args.inputs],
+                                           args.title)
 
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(output_text.encode("utf-8"))
@@ -1256,6 +1442,20 @@ def main(argv=None) -> int:
             print(f"  Total:   {human_size(result.total_bytes)}")
         else:
             snaps = [parse_v2(p, t) for p, t in texts]
+
+            # Apply the requested title to every root before merging, so the
+            # root metadata and the folded root already agree on it.
+            if args.title is not None:
+                for s in snaps:
+                    for e in s.entries:
+                        if e["parent"] == -1:
+                            _v2_set_meta_string(e, "title", args.title, s.path)
+
+            if args.flatten_root:
+                first_root = next(e for e in snaps[0].entries
+                                  if e["parent"] == -1)
+                label = args.title if args.title is not None else first_root["name"]
+                snaps = _v2_flatten_roots(snaps, label)
 
             # For roots that also exist in the first snapshot, the link setup
             # and title should agree; otherwise keep the first snapshot's.
@@ -1283,7 +1483,7 @@ def main(argv=None) -> int:
                                               sort_refs=not args.keep_order)
             output_text = render_v2_output(snaps[0], merged,
                                            [p.name for p in args.inputs],
-                                           info)
+                                           info, args.title)
 
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(output_text.encode("utf-8"))
