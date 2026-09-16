@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
     Consolidate the Snap2HTML 2.5+ movie snapshots in this folder into one
-    'Movies' snapshot: search_movies.html.
+    'Movies' snapshot (search_movies.html) plus a card-based landing page
+    (index.html) built from the same data.
 
 .DESCRIPTION
     Reads every movies\Movies_*.html snapshot (Snap2HTML 2.5+ / V2 /
@@ -32,9 +33,19 @@
     'Movies' root instead (nothing is lost, but the 'Movies' node then
     shows those stray files).
 
-    The output is produced by filling the placeholders in template.html
-    ([PAGE TITLE], [DIR DATA], [NUM FILES], ...), not by rewriting one of
-    the inputs. File links are disabled (linkRoot "") because the merged
+    Two artifacts are produced, both by filling placeholders in a template
+    rather than by rewriting one of the inputs:
+
+      1. search_movies.html - the Snap2HTML snapshot, filled from
+         template.html. Open it for the classic tree/search view.
+      2. index.html - a dark, responsive card grid of every movie, filled
+         from landing_template.html. It embeds the very same folder data, so
+         the two can never drift, and it is fully self-contained (no network
+         requests, so it opens straight from disk). Grouping the raw
+         'INDEX__Title__YEAR.ext' file names into movies, and the filtering
+         and sorting, all happen in the page's own JavaScript at load time.
+
+    Use -SkipLanding to emit only the snapshot. File links are disabled (linkRoot "") because the merged
     tree spans several drives, so no single link root can be correct.
 
     Works with Windows PowerShell 5.1 and PowerShell 7+.
@@ -62,6 +73,17 @@
     Keep each input's original child order (Movies_I then Movies_J, ...)
     instead of re-sorting the combined top-level listing.
 
+.PARAMETER LandingTemplate
+    Landing page template to fill. Default: landing_template.html in the
+    repository root. If it is missing the landing page is skipped with a
+    warning (pass the parameter explicitly to make that an error instead).
+
+.PARAMETER LandingFile
+    Destination landing page. Default: index.html in the repository root.
+
+.PARAMETER SkipLanding
+    Write only the Snap2HTML snapshot, not the landing page.
+
 .EXAMPLE
     PS> .\movies\allmovies.ps1
 
@@ -72,6 +94,11 @@
     PS> .\movies\allmovies.ps1 -KeepRootFiles -OutputFile search_movies.html
 
     Same, but keeps stray drive-root files and writes to the repo root.
+
+.EXAMPLE
+    PS> .\movies\allmovies.ps1 -SkipLanding
+
+    Rebuild only movies\search_movies.html, leaving index.html alone.
 
 .NOTES
     If script execution is blocked by policy, run it with:
@@ -96,7 +123,16 @@ param(
     [switch]$KeepRootFiles,
 
     [Parameter()]
-    [switch]$KeepOrder
+    [switch]$KeepOrder,
+
+    [Parameter()]
+    [string]$LandingTemplate,
+
+    [Parameter()]
+    [string]$LandingFile,
+
+    [Parameter()]
+    [switch]$SkipLanding
 )
 
 $ErrorActionPreference = 'Stop'
@@ -132,6 +168,27 @@ if (-not $OutputFile) {
     $OutputFile = Join-Path $scriptDir 'search_movies.html'
 }
 $OutputFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputFile)
+
+# Landing page: landing_template.html in the repo root -> index.html.
+# It embeds the very same folder data, so the two artifacts cannot drift.
+$buildLanding = -not $SkipLanding
+if ($buildLanding) {
+    if (-not $LandingTemplate) {
+        $LandingTemplate = Join-Path $repoRoot 'landing_template.html'
+    }
+    if (Test-Path -LiteralPath $LandingTemplate -PathType Leaf) {
+        $LandingTemplate = (Resolve-Path -LiteralPath $LandingTemplate).Path
+        if (-not $LandingFile) { $LandingFile = Join-Path $repoRoot 'index.html' }
+        $LandingFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LandingFile)
+    }
+    elseif ($PSBoundParameters.ContainsKey('LandingTemplate')) {
+        throw ('landing template not found: {0}' -f $LandingTemplate)
+    }
+    else {
+        Write-Warning ('landing template not found ({0}); skipping the landing page' -f $LandingTemplate)
+        $buildLanding = $false
+    }
+}
 
 # Default inputs: every Movies_*.html next to this script, except the output.
 if (-not $InputFiles -or $InputFiles.Count -eq 0) {
@@ -369,6 +426,70 @@ function Read-Utf8File {
     if ($hasBom) { $text = $enc.GetString($bytes, 3, $bytes.Length - 3) }
     else         { $text = $enc.GetString($bytes) }
     return @{ Text = $text; HasBom = $hasBom }
+}
+
+function Invoke-TemplateFill {
+    # Replace [PLACEHOLDER] tokens in a Snap2HTML-style template. Literal
+    # String.Replace (not regex), so '$' and '\' in the injected data are
+    # never reinterpreted. Longer tokens must come first in $Replacements so
+    # that e.g. [PAGE TITLE JS] is not eaten by [PAGE TITLE].
+    param(
+        [Parameter(Mandatory = $true)][string]$Template,
+        [Parameter(Mandatory = $true)][string]$TemplatePath,
+        [Parameter(Mandatory = $true)]$Replacements
+    )
+    if ($Template.IndexOf('[DIR DATA]', [System.StringComparison]::Ordinal) -lt 0) {
+        throw ('{0}: does not look like a Snap2HTML template ([DIR DATA] placeholder missing)' -f $TemplatePath)
+    }
+    $out = $Template
+    foreach ($key in $Replacements.Keys) {
+        $count = ([regex]::Matches($out, [regex]::Escape($key))).Count
+        if ($key -eq '[DIR DATA]') {
+            # The data blob must be injected exactly once. It has to sit on a
+            # line of its own: inside a '//' comment the first p([...]) entry
+            # would be commented out and silently disappear.
+            if ($count -ne 1) {
+                throw ('{0}: [DIR DATA] must appear exactly once, found {1}' -f $TemplatePath, $count)
+            }
+        }
+        elseif ($count -lt 1) {
+            Write-Warning ('{0}: template placeholder {1} was not found' -f $TemplatePath, $key)
+        }
+        $out = $out.Replace($key, [string]$Replacements[$key])
+    }
+    $leftover = [regex]::Match($out,
+        '\[(PAGE TITLE JS|PAGE TITLE|BODY TITLE|DIR DATA|NUM FILES|NUM DIRS|TOT BYTES|TOT SIZE|GEN DATE|GEN TIME|GEN TIMESTAMP|APP NAME|APP VER|APP LINK|DATA VER)\]')
+    if ($leftover.Success) {
+        throw ('{0}: template placeholder {1} was not replaced' -f $TemplatePath, $leftover.Value)
+    }
+    return $out
+}
+
+function Add-ProvenanceNote {
+    # Insert our own HTML comment directly after the generator's comment.
+    # Requires exactly one anchor so we never touch an unrelated comment;
+    # returns the text unchanged when the anchor is absent.
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Note
+    )
+    $rxNote = [regex]'(?m)^(<!-- This file was generated by .*?-->\r?)$'
+    if (($rxNote.Matches($Text)).Count -ne 1) { return $Text }
+    return $rxNote.Replace($Text, ('${1}' + "`n" + $Note.Replace('$', '$$')), 1)
+}
+
+function Write-Utf8NoBom {
+    # Match template.html: UTF-8 without a BOM, LF line endings.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $Text, $utf8NoBom)
 }
 
 # ---------------------------------------------------------------------------
@@ -826,14 +947,8 @@ Write-Host ('Combined {0} movie folders under root ''{1}'' ({2} folders, {3} fil
     $topLevel.Count, $Title, $nDirs, $nFiles)
 
 # ---------------------------------------------------------------------------
-# Fill template.html
+# Fill the templates
 # ---------------------------------------------------------------------------
-
-$tplRead = Read-Utf8File -Path $TemplateFile
-$template = $tplRead.Text
-if ($template.IndexOf('[DIR DATA]', [System.StringComparison]::Ordinal) -lt 0) {
-    throw ('{0}: does not look like Snap2HTML template.html ([DIR DATA] placeholder missing)' -f $TemplateFile)
-}
 
 $baseMeta = $snapshots[0].Meta
 $appName = Unescape-JsString $baseMeta.AppName
@@ -852,6 +967,14 @@ $totSize = Get-CSharpFileSize -Bytes $nBytes
 $pageTitleHtml = Get-HtmlEncoded $Title
 $bodyTitle     = (Get-HtmlEncoded $Title).Replace('\', '\<wbr>')
 $pageTitleJs   = Get-JsStringInner $Title
+
+$inputNames = ($snapshots | ForEach-Object { $_.Name }) -join ', '
+$today = $now.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+$note = '<!-- Consolidated from {0} using allmovies.ps1 on {1} -->' -f $inputNames, $today
+
+# --- 1. the Snap2HTML snapshot --------------------------------------------
+
+$tplRead = Read-Utf8File -Path $TemplateFile
 
 # Longer tokens first so [PAGE TITLE JS] is not eaten by [PAGE TITLE].
 $replacements = [ordered]@{
@@ -872,37 +995,38 @@ $replacements = [ordered]@{
     '[DIR DATA]'      = $dirData
 }
 
-$output = $template
-foreach ($key in $replacements.Keys) {
-    $count = ([regex]::Matches($output, [regex]::Escape($key))).Count
-    if ($count -lt 1) {
-        Write-Warning ('template placeholder {0} was not found' -f $key)
+$output = Invoke-TemplateFill -Template $tplRead.Text -TemplatePath $TemplateFile -Replacements $replacements
+$output = Add-ProvenanceNote -Text $output -Note $note
+Write-Utf8NoBom -Path $OutputFile -Text $output
+
+# --- 2. the card-based landing page ---------------------------------------
+#
+# The landing page embeds the very same $dirData and decodes it with the same
+# Snap2HTML V2 rules, so it can never drift from the snapshot. All the messy
+# work (grouping 'INDEX__Title__YEAR.ext' file names into movies) happens in
+# the page's own JavaScript at load time, not here.
+
+if ($buildLanding) {
+    $landingRead = Read-Utf8File -Path $LandingTemplate
+    $landingReplacements = [ordered]@{
+        '[PAGE TITLE]' = $pageTitleHtml
+        '[BODY TITLE]' = $pageTitleHtml
+        '[APP NAME]'   = (Get-HtmlEncoded $appName)
+        '[APP VER]'    = (Get-HtmlEncoded $appVer)
+        '[APP LINK]'   = $appLink
+        '[GEN DATE]'   = $genDate
+        '[GEN TIME]'   = $genTime
+        '[NUM FILES]'  = ([string]$nFiles)
+        '[NUM DIRS]'   = ([string]$nDirs)
+        '[TOT SIZE]'   = $totSize
+        '[DIR DATA]'   = $dirData
     }
-    $output = $output.Replace($key, [string]$replacements[$key])
+    $landingOut = Invoke-TemplateFill -Template $landingRead.Text -TemplatePath $LandingTemplate -Replacements $landingReplacements
+    $landingOut = Add-ProvenanceNote -Text $landingOut -Note $note
+    Write-Utf8NoBom -Path $LandingFile -Text $landingOut
 }
 
-# Provenance comment next to the generator's own comment.
-$inputNames = ($snapshots | ForEach-Object { $_.Name }) -join ', '
-$today = $now.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
-$note = '<!-- Consolidated from {0} using allmovies.ps1 on {1} -->' -f $inputNames, $today
-$rxNote = [regex]'(?m)^(<!-- This file was generated by .*?-->\r?)$'
-if (($rxNote.Matches($output)).Count -eq 1) {
-    $output = $rxNote.Replace($output, ('${1}' + "`n" + $note.Replace('$', '$$')), 1)
-}
-
-$leftover = [regex]::Match($output,
-    '\[(PAGE TITLE JS|PAGE TITLE|BODY TITLE|DIR DATA|NUM FILES|NUM DIRS|TOT BYTES|TOT SIZE|GEN DATE|GEN TIME|GEN TIMESTAMP|APP NAME|APP VER|APP LINK|DATA VER)\]')
-if ($leftover.Success) {
-    throw ('template placeholder {0} was not replaced' -f $leftover.Value)
-}
-
-$outDir = Split-Path -Parent $OutputFile
-if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
-    New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-}
-# Match template.html: UTF-8, no BOM, LF line endings (already LF from the template).
-$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-[System.IO.File]::WriteAllText($OutputFile, $output, $utf8NoBom)
+# --- summary --------------------------------------------------------------
 
 Write-Host ''
 Write-Host ('Wrote {0}' -f $OutputFile)
@@ -911,6 +1035,10 @@ Write-Host ('  Root:    {0} ({1} movie folders from {2} snapshots)' -f $Title, $
 Write-Host ('  Folders: {0}' -f $nDirs)
 Write-Host ('  Files:   {0}' -f $nFiles)
 Write-Host ('  Total:   {0}' -f $totSize)
+if ($buildLanding) {
+    Write-Host ('Wrote {0}' -f $LandingFile)
+    Write-Host ('  Card-based landing page built from the same {0} folder entries' -f $nDirs)
+}
 if (-not $KeepRootFiles -and $droppedFiles -gt 0) {
     Write-Host ('  Note:    {0} loose file(s) at the drive root were discarded ({1}); use -KeepRootFiles to keep them' -f `
         $droppedFiles, (Get-CSharpFileSize -Bytes $droppedBytes))
