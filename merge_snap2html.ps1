@@ -132,7 +132,13 @@ if ([string]::IsNullOrWhiteSpace($Title)) {
 function Get-JavaScriptString {
     # HttpUtility.JavaScriptStringEncode() with default settings, including
     # the surrounding quotes. Used for names inside p([...]) data lines.
-    param([Parameter(Mandatory = $true)][string]$Value)
+    # AllowEmptyString: PowerShell treats '' as "missing" on Mandatory
+    # [string] params, but linkRoot (and similar) is legitimately empty.
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('"')
     foreach ($ch in $Value.ToCharArray()) {
@@ -213,7 +219,9 @@ function Get-CSharpFileSize {
 
 function Get-PaddedDigits {
     param(
-        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Text,
         [Parameter(Mandatory = $true)][int]$Width
     )
     $sb = New-Object System.Text.StringBuilder
@@ -278,14 +286,22 @@ function ConvertTo-JsMetaObject {
 }
 
 function Get-HtmlEncoded {
-    param([Parameter(Mandatory = $true)][string]$Value)
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
     return [System.Net.WebUtility]::HtmlEncode($Value)
 }
 
 function Get-JsStringInner {
     # Inner (unquoted) JS string for use inside the already-quoted
     # title: "..." SNAPMETA field.
-    param([Parameter(Mandatory = $true)][string]$Value)
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
     $q = Get-JavaScriptString $Value
     return $q.Substring(1, $q.Length - 2)
 }
