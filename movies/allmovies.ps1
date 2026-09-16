@@ -1,0 +1,1422 @@
+<#
+.SYNOPSIS
+    Consolidate the Snap2HTML 2.5+ movie snapshots in this folder into one
+    'Movies' snapshot (search_movies.html) plus a card-based landing page
+    (index.html) built from the same data.
+
+.DESCRIPTION
+    Reads every movies\Movies_*.html snapshot (Snap2HTML 2.5+ / V2 /
+    dataVersion 2) and writes a single snapshot that adheres to the
+    Snap2HTML 2.5 template.html format in the repository root.
+
+    Each input is a snapshot of a different drive (I:\, J:\, K:\, ...).
+    This script drops those original drive roots and re-parents every
+    movies_NN_* folder from every input under one synthetic root named
+    'Movies'. The page title (<title>, snap.title and <h1>) is also
+    'Movies', so the treeview shows a single 'Movies' node with all 79
+    movie folders from all inputs listed directly beneath it.
+
+    Folder ids in the second and later inputs are remapped so every
+    parent/subfolder reference stays valid. Top-level movie folders are
+    listed in Snap2HTML's natural sort order (case-insensitive, 'folder 2'
+    before 'folder 10'). Header counters (file count, folder count, total
+    size) are recomputed from the combined tree.
+
+    Loose files at a drive root
+    ---------------------------
+    A snapshot may contain files that sit directly in the drive root rather
+    than inside a movies_NN_* folder (Movies_L.html has L:\msdia80.dll).
+    Because the drive roots are dropped, such files have no folder left to
+    live in. By default they are discarded, and the recomputed file count
+    and total size are reduced accordingly so the output stays internally
+    consistent. Pass -KeepRootFiles to attach them to the synthetic
+    'Movies' root instead (nothing is lost, but the 'Movies' node then
+    shows those stray files).
+
+    Two artifacts are produced, both by filling placeholders in a template
+    rather than by rewriting one of the inputs:
+
+      1. search_movies.html - the Snap2HTML snapshot, filled from
+         template.html. Open it for the classic tree/search view.
+      2. index.html - a dark, responsive card grid of every movie, filled
+         from landing_template.html. It embeds the very same folder data, so
+         the two can never drift, and it is fully self-contained (no network
+         requests, so it opens straight from disk). Grouping the raw
+         'INDEX__Title__YEAR.ext' file names into movies, and the filtering
+         and sorting, all happen in the page's own JavaScript at load time.
+
+    Use -SkipLanding to emit only the snapshot. File links are disabled (linkRoot "") because the merged
+    tree spans several drives, so no single link root can be correct.
+
+    Default folder, and asking when it is empty
+    -------------------------------------------
+    Inputs are looked for in
+    D:\entertainment\collecting\snap2html_directory_listing and both artifacts
+    are written back there, so with the collection in place the script needs
+    no arguments at all.
+
+    If that folder holds no Movies_*.html, the script asks instead of failing:
+    it prompts for input files one at a time until you press Enter on an empty
+    line or type 'done'. Each answer may be a single file, a folder (its
+    Movies_*.html files are used) or a wildcard path, and every answer is
+    checked as you type it - a path that matches nothing is reported and
+    asked again rather than silently skipped. 'list' reviews what has been
+    collected and 'clear' starts over.
+
+    Once you are done it asks for the output file name and location as a
+    second question, showing the default in brackets; press Enter to accept
+    it. A bare file name is placed in that same default folder, and the
+    landing page is written beside whatever you choose.
+
+    Explicit -InputFiles / -OutputFile always win over prompting, so the
+    script stays fully scriptable. -NoPrompt disables the questions for
+    unattended runs, and -Prompt asks them even when snapshots were found.
+
+    The two templates are looked for in
+    D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML first
+    (-TemplateDir), then in this script's folder, the repository root, the
+    collection folder and the current directory - so the script works whether
+    the templates sit beside the data or beside the script.
+
+    Works with Windows PowerShell 5.1 and PowerShell 7+.
+
+.PARAMETER InputFiles
+    Snapshot files to consolidate. Default: every Movies_*.html in
+    D:\entertainment\collecting\snap2html_directory_listing, in name order.
+    Each entry may be a single file, a folder (its Movies_*.html files are
+    used) or a wildcard path. Wildcards are expanded, and neither output file
+    is ever treated as an input.
+
+    If nothing matches in the default folder the script prompts for the files
+    one at a time instead - see the description above. Supplying this
+    parameter skips that prompting entirely.
+
+.PARAMETER OutputFile
+    Destination snapshot. Default: search_movies.html in
+    D:\entertainment\collecting\snap2html_directory_listing. When the inputs
+    were asked for interactively, this is asked for too, with the default
+    shown in brackets (Enter accepts it). The folder is created if needed,
+    unless its drive is missing - then results go next to the first input.
+
+.PARAMETER TemplateDir
+    Folder that holds the two templates. Default:
+    D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML
+    A trailing separator is optional. This folder is searched first, so it
+    wins over copies found elsewhere; -TemplateFile and -LandingTemplate
+    override an individual file outright.
+
+.PARAMETER TemplateFile
+    Snap2HTML 2.5 template.html to fill. Default: the first template.html
+    found in -TemplateDir, then this script's folder, then the repository
+    root, then the default collection folder, then the current directory. A
+    missing template is an error, since nothing can be produced without it.
+
+.PARAMETER Title
+    Name of the synthetic root folder and of the page title. Default: Movies.
+
+.PARAMETER KeepRootFiles
+    Attach files found directly in an input's drive root to the synthetic
+    root folder instead of discarding them.
+
+.PARAMETER KeepOrder
+    Keep each input's original child order (Movies_I then Movies_J, ...)
+    instead of re-sorting the combined top-level listing.
+
+.PARAMETER LandingTemplate
+    Landing page template to fill. Default: the first landing_template.html
+    found in the same folders as -TemplateFile, so -TemplateDir covers it too.
+    If it is missing the landing page is skipped with a warning (pass the
+    parameter explicitly to make that an error instead).
+
+.PARAMETER LandingFile
+    Destination landing page. Default: index.html in the same folder as the
+    snapshot, so the page's relative 'Tree view' link keeps working.
+
+.PARAMETER SkipLanding
+    Write only the Snap2HTML snapshot, not the landing page.
+
+.PARAMETER Prompt
+    Ask for the inputs and the output even when Movies_*.html files were
+    found in the default folder. The files found are shown and become the
+    starting list, so this is how you add to them interactively.
+
+.PARAMETER NoPrompt
+    Never ask. When no snapshot is found in the default folder, fail with an
+    error instead of prompting. Use this for scheduled or unattended runs.
+
+.EXAMPLE
+    PS> .\allmovies.ps1
+
+    With the collection in D:\entertainment\collecting\snap2html_directory_listing,
+    merges every Movies_*.html there into search_movies.html and index.html in
+    the same folder, asking nothing:
+
+      Found 6 snapshot(s) in D:\entertainment\collecting\snap2html_directory_listing
+
+.EXAMPLE
+    PS> .\allmovies.ps1
+
+    Same command, but the default folder has no snapshots, so it asks:
+
+      No Movies_*.html snapshots were found in:
+        D:\entertainment\collecting\snap2html_directory_listing
+        (that folder does not exist)
+      ...
+      first input> E:\backups\Movies_I.html
+        + E:\backups\Movies_I.html
+      next input (1 so far)> E:\backups\old drives
+        + 5 files
+      next input (6 so far)> done
+
+      Using 6 input file(s):
+        ...
+      Output file name and location [D:\...\search_movies.html]> E:\merged.html
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -InputFiles D:\movies\Movies_*.html -OutputFile D:\out\m.html
+
+    Explicit paths, so nothing is prompted for.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -Prompt
+
+    Ask even though snapshots were found: shows them as the starting list so
+    you can add more before continuing.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -NoPrompt
+
+    Unattended: error out instead of prompting if the default folder is empty.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -KeepRootFiles
+
+    Same, but keeps stray drive-root files instead of discarding them.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -TemplateDir C:\tools\Snap2HTML
+
+    Take template.html and landing_template.html from another folder.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -SkipLanding
+
+    Rebuild only search_movies.html, leaving index.html alone.
+
+.NOTES
+    If script execution is blocked by policy, run it with:
+    powershell -ExecutionPolicy Bypass -File .\allmovies.ps1
+
+    Note that -File runs the script non-interactively only in the sense that
+    arguments come from the command line; Read-Host still works in a normal
+    console. If the host cannot prompt, the script says so and tells you which
+    parameters to pass instead.
+
+    To point the script at a different collection permanently, edit
+    $DefaultDir near the top of the file.
+#>
+[CmdletBinding()]
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$InputFiles,
+
+    [Parameter()]
+    [Alias('o')]
+    [string]$OutputFile,
+
+    [Parameter()]
+    [string]$TemplateFile,
+
+    [Parameter()]
+    [string]$Title = 'Movies',
+
+    [Parameter()]
+    [switch]$KeepRootFiles,
+
+    [Parameter()]
+    [switch]$KeepOrder,
+
+    [Parameter()]
+    [string]$TemplateDir,
+
+    [Parameter()]
+    [string]$LandingTemplate,
+
+    [Parameter()]
+    [string]$LandingFile,
+
+    [Parameter()]
+    [switch]$SkipLanding,
+
+    [Parameter()]
+    [switch]$Prompt,
+
+    [Parameter()]
+    [switch]$NoPrompt
+)
+
+$ErrorActionPreference = 'Stop'
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+function Resolve-ExistingFile {
+    param([Parameter(Mandatory = $true)][string]$Path, [string]$What)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw ('{0} not found: {1}' -f $What, $Path)
+    }
+    return (Resolve-Path -LiteralPath $Path).Path
+}
+
+# $PSScriptRoot is the script's folder (not the caller's) on PS 3+.
+$scriptDir = $PSScriptRoot
+if (-not $scriptDir) {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+$repoRoot = Split-Path -Parent $scriptDir
+if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'template.html'))) {
+    $repoRoot = $scriptDir
+}
+
+# ---------------------------------------------------------------------------
+# Default folder for the snapshots and for the results
+# ---------------------------------------------------------------------------
+# The collection is expected to live in $DefaultDir and both artifacts are
+# written back there, so with the data in place the script needs no arguments
+# at all. Every parameter still overrides this, and when no snapshot is found
+# in $DefaultDir the script asks for the files one at a time rather than
+# failing outright.
+
+$DefaultDir              = 'D:\entertainment\collecting\snap2html_directory_listing'
+$DefaultTemplateDir      = 'D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML'
+$DefaultInputName        = 'Movies_*.html'
+$DefaultOutputName       = 'search_movies.html'
+$DefaultLandingName      = 'index.html'
+$TemplateFileName        = 'template.html'
+$LandingTemplateFileName = 'landing_template.html'
+
+# Folders searched for the two templates, best first. An explicitly designated
+# template folder wins, then the tool's own copies, then $DefaultDir (templates
+# kept beside the data), then wherever the script was invoked from. Reorder the
+# list below to change that priority.
+if (-not $TemplateDir) { $TemplateDir = $DefaultTemplateDir }
+if ($TemplateDir -and $TemplateDir.Length -gt 3) {
+    # Tolerate a trailing separator: Join-Path would otherwise be fine with it,
+    # but the de-duplication below compares literal strings.
+    $TemplateDir = $TemplateDir.TrimEnd([char[]]@('\', '/'))
+}
+
+$searchDirs = New-Object System.Collections.Generic.List[string]
+foreach ($d in @($TemplateDir, $scriptDir, $repoRoot, $DefaultDir, (Get-Location).Path)) {
+    if ($d -and ($searchDirs -notcontains $d)) { $searchDirs.Add($d) }
+}
+$searchDirsText = ($searchDirs.ToArray() -join '; ')
+
+function Find-FirstFile {
+    # -Name is a BARE FILE NAME ('template.html'), never a path: the folders to
+    # look in come from -Dirs, and each is combined with Join-Path.
+    #
+    # Beware the PowerShell gotcha that produces "Cannot bind argument to
+    # parameter 'Name' because it is an empty string": $a.$b is PROPERTY ACCESS,
+    # not concatenation, so '$dir.$name' asks a string for a property called
+    # 'template.html' and yields $null. To build a path use
+    # (Join-Path $dir $name) or "$dir\$name"; to search another folder add it
+    # to -Dirs (or pass -TemplateDir).
+    param([string]$Name, [string[]]$Dirs)
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        throw ('Find-FirstFile: -Name must be a bare file name such as {0}, not a path and not empty. To search another folder, add it to $searchDirs or pass -TemplateDir; to build a path, use (Join-Path $dir $name).' -f $TemplateFileName)
+    }
+    foreach ($d in $Dirs) {
+        if (-not $d) { continue }
+        $candidate = Join-Path $d $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+    return $null
+}
+
+function Read-Line {
+    # Read-Host throws when the host has no interactive UI (a service, some CI
+    # runners). Turn that into something the user can act on.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$PromptText)
+    try {
+        return Read-Host $PromptText
+    }
+    catch {
+        throw ('Interactive prompts are not available in this host. Pass the files explicitly instead: allmovies.ps1 -InputFiles "{0}\{1}" -OutputFile "<path>"' -f $DefaultDir, $DefaultInputName)
+    }
+}
+
+function Resolve-InputEntry {
+    # Accepts a file, a folder (its Movies_*.html files are used) or a
+    # wildcard path, and returns the full paths of the files it refers to.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Entry)
+
+    $entry = $Entry.Trim().Trim('"').Trim("'").Trim()
+    if ($entry.Length -eq 0) { return @() }
+
+    $items = @()
+    try {
+        if ($entry -match '[\*\?\[\]]') {
+            $items = @(Get-ChildItem -Path $entry -File -ErrorAction Stop |
+                Where-Object { $_.Extension -ieq '.html' } |
+                Sort-Object -Property Name)
+            if ($items.Count -eq 0) { Write-Warning ('    no files match {0}' -f $entry) }
+        }
+        elseif (Test-Path -LiteralPath $entry -PathType Container) {
+            $items = @(Get-ChildItem -LiteralPath $entry -File -Filter $DefaultInputName -ErrorAction Stop |
+                Sort-Object -Property Name)
+            if ($items.Count -eq 0) {
+                # Nothing matched the usual name: accept any other snapshot in
+                # the folder, but never one of our own artifacts.
+                $items = @(Get-ChildItem -LiteralPath $entry -File -Filter '*.html' -ErrorAction Stop |
+                    Where-Object { $_.Name -ine $DefaultOutputName -and $_.Name -ine $DefaultLandingName } |
+                    Sort-Object -Property Name)
+            }
+            if ($items.Count -eq 0) { Write-Warning ('    no snapshot files in {0}' -f $entry) }
+        }
+        elseif (Test-Path -LiteralPath $entry -PathType Leaf) {
+            $items = @(Get-Item -LiteralPath $entry)
+        }
+        else {
+            Write-Warning ('    not found: {0}' -f $entry)
+            return @()
+        }
+    }
+    catch {
+        Write-Warning ('    could not read {0} ({1})' -f $entry, $_.Exception.Message)
+        return @()
+    }
+
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($item in $items) { $out.Add($item.FullName) }
+    return $out.ToArray()
+}
+
+function Request-InputFiles {
+    # Ask for the snapshots one at a time until the user says they are done.
+    param([string]$SearchDir, [string[]]$Initial = @())
+
+    $found = New-Object System.Collections.Generic.List[string]
+    foreach ($i in @($Initial)) {
+        if ($i -and ($found -notcontains $i)) { $found.Add($i) }
+    }
+
+    Write-Host ''
+    if ($found.Count -gt 0) {
+        Write-Host ('Found {0} snapshot(s) in:' -f $found.Count)
+        Write-Host ('  {0}' -f $SearchDir)
+        foreach ($f in $found) { Write-Host ('    {0}' -f $f) }
+        Write-Host ''
+        Write-Host 'Press Enter to use these, or type more paths to add to them.'
+    }
+    else {
+        Write-Host ('No {0} snapshots were found in:' -f $DefaultInputName) -ForegroundColor Yellow
+        Write-Host ('  {0}' -f $SearchDir) -ForegroundColor Yellow
+        if (-not (Test-Path -LiteralPath $SearchDir)) {
+            Write-Host '  (that folder does not exist)' -ForegroundColor Yellow
+        }
+    }
+    Write-Host ''
+    Write-Host 'Enter the snapshots to merge, one per line. Each line may be a file,'
+    Write-Host ('a folder (its {0} files are used), or a wildcard path.' -f $DefaultInputName)
+    Write-Host 'Type "list" to review what you have entered, "clear" to start over.'
+    Write-Host 'Press Enter on an empty line, or type "done", when you are finished.'
+
+    while ($true) {
+        Write-Host ''
+        $label = if ($found.Count -gt 0) { '  next input ({0} so far)>' -f $found.Count } else { '  first input>' }
+        $line = Read-Line $label
+        if ($null -eq $line) { break }
+
+        $t = $line.Trim().Trim('"').Trim("'").Trim()
+        if ($t.Length -eq 0) { break }
+        if ($t -imatch '^(done|finish|quit|exit|q)$') { break }
+
+        if ($t -imatch '^(list|ls)$') {
+            if ($found.Count -eq 0) { Write-Host '    (nothing collected yet)' }
+            $k = 0
+            foreach ($f in $found) { $k++; Write-Host ('    {0,2}. {1}' -f $k, $f) }
+            continue
+        }
+        if ($t -imatch '^(clear|reset)$') {
+            $found.Clear()
+            Write-Host '    cleared - start again'
+            continue
+        }
+
+        $got = @(Resolve-InputEntry $t)
+        if ($got.Count -eq 0) {
+            Write-Host '    nothing added; try again, or press Enter to finish' -ForegroundColor Yellow
+            continue
+        }
+        $added = 0
+        foreach ($g in $got) {
+            if ($found -notcontains $g) { $found.Add($g); $added++ }
+        }
+        if     ($added -eq 1) { Write-Host ('    + {0}' -f $got[0]) }
+        elseif ($added -eq 0) { Write-Host '    already in the list' }
+        else                  { Write-Host ('    + {0} files' -f $added) }
+    }
+
+    if ($found.Count -eq 0) { return @() }
+    Write-Host ''
+    Write-Host ('Using {0} input file(s):' -f $found.Count)
+    $k = 0
+    foreach ($f in $found) { $k++; Write-Host ('  {0,2}. {1}' -f $k, $f) }
+    return $found.ToArray()
+}
+
+function Request-OutputFile {
+    # The secondary question: where the merged snapshot should be written.
+    param([Parameter(Mandatory = $true)][string]$Suggested)
+
+    Write-Host ''
+    $line = Read-Line ('Output file name and location [{0}]' -f $Suggested)
+    if ($null -eq $line) { return $Suggested }
+    $t = $line.Trim().Trim('"').Trim("'").Trim()
+    if ($t.Length -eq 0) { return $Suggested }
+    # A bare file name keeps the suggested folder.
+    if ($t -notmatch '[\\/:]') { $t = Join-Path (Split-Path -Parent $Suggested) $t }
+    return $t
+}
+
+# ---------------------------------------------------------------------------
+# Inputs: search the default folder, and ask when nothing is there
+# ---------------------------------------------------------------------------
+
+$askedForInputs = $false
+$resolvedInputs = New-Object System.Collections.Generic.List[string]
+
+if ($PSBoundParameters.ContainsKey('InputFiles') -and @($InputFiles).Count -gt 0) {
+    # Named on the command line: use exactly those, and never prompt.
+    foreach ($spec in $InputFiles) {
+        $got = @(Resolve-InputEntry $spec)
+        if ($got.Count -eq 0) { throw ('no snapshot files match: {0}' -f $spec) }
+        foreach ($g in $got) {
+            if ($resolvedInputs -notcontains $g) { $resolvedInputs.Add($g) }
+        }
+    }
+}
+else {
+    if (Test-Path -LiteralPath $DefaultDir -PathType Container) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $DefaultDir -File -Filter $DefaultInputName |
+                         Sort-Object -Property Name)) {
+            $resolvedInputs.Add($f.FullName)
+        }
+    }
+
+    if ($resolvedInputs.Count -gt 0 -and -not $Prompt) {
+        Write-Host ('Found {0} snapshot(s) in {1}' -f $resolvedInputs.Count, $DefaultDir)
+    }
+
+    if ($resolvedInputs.Count -eq 0 -or $Prompt) {
+        if ($NoPrompt) {
+            throw ('no {0} snapshots found in {1} and -NoPrompt was given; pass -InputFiles explicitly' -f $DefaultInputName, $DefaultDir)
+        }
+        $askedForInputs = $true
+        $collected = @(Request-InputFiles -SearchDir $DefaultDir -Initial $resolvedInputs.ToArray())
+        $resolvedInputs = New-Object System.Collections.Generic.List[string]
+        foreach ($c in $collected) { $resolvedInputs.Add($c) }
+    }
+}
+
+if ($resolvedInputs.Count -lt 1) {
+    throw ('no input snapshot files to merge (looked in {0})' -f $DefaultDir)
+}
+
+# ---------------------------------------------------------------------------
+# Outputs: the default folder, unless overridden or asked
+# ---------------------------------------------------------------------------
+
+$outDir = $DefaultDir
+if (-not (Test-Path -LiteralPath $outDir)) {
+    $drive = [System.IO.Path]::GetPathRoot($outDir)
+    if (-not ($drive -and (Test-Path -LiteralPath $drive))) {
+        # No such drive on this machine - keep the results beside the inputs.
+        $outDir = Split-Path -Parent $resolvedInputs[0]
+        Write-Warning ('default output folder {0} is unavailable; using {1}' -f $DefaultDir, $outDir)
+    }
+}
+
+if (-not $OutputFile) {
+    $OutputFile = Join-Path $outDir $DefaultOutputName
+    if ($askedForInputs -or $Prompt) {
+        $OutputFile = Request-OutputFile -Suggested $OutputFile
+    }
+}
+$OutputFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputFile)
+
+# Landing page: landing_template.html -> index.html next to the snapshot.
+# It embeds the very same folder data, so the two artifacts cannot drift.
+$buildLanding = -not $SkipLanding
+if ($buildLanding) {
+    if (-not $LandingTemplate) {
+        $LandingTemplate = Find-FirstFile -Name $LandingTemplateFileName -Dirs $searchDirs.ToArray()
+    }
+    if ($LandingTemplate -and (Test-Path -LiteralPath $LandingTemplate -PathType Leaf)) {
+        $LandingTemplate = (Resolve-Path -LiteralPath $LandingTemplate).Path
+        if (-not $LandingFile) {
+            $LandingFile = Join-Path (Split-Path -Parent $OutputFile) $DefaultLandingName
+        }
+        $LandingFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LandingFile)
+    }
+    elseif ($PSBoundParameters.ContainsKey('LandingTemplate')) {
+        throw ('landing template not found: {0}' -f $LandingTemplate)
+    }
+    else {
+        Write-Warning ('landing template {0} not found (searched {1}); skipping the landing page' -f $LandingTemplateFileName, $searchDirsText)
+        $buildLanding = $false
+    }
+}
+
+# Never merge one of our own artifacts back in (a renamed output can match
+# Movies_*.html, and a folder answer can pick up index.html).
+$fullOut = [System.IO.Path]::GetFullPath($OutputFile)
+$fullLanding = if ($buildLanding) { [System.IO.Path]::GetFullPath($LandingFile) } else { '' }
+$cleaned = New-Object System.Collections.Generic.List[string]
+foreach ($p in $resolvedInputs) {
+    $fp = [System.IO.Path]::GetFullPath($p)
+    if ($fp -ieq $fullOut) { continue }
+    if ($fullLanding -and ($fp -ieq $fullLanding)) { continue }
+    if ($cleaned -notcontains $p) { $cleaned.Add($p) }
+}
+$resolvedInputs = $cleaned
+
+if ($resolvedInputs.Count -lt 1) {
+    throw 'at least one input snapshot file is required'
+}
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+
+if (-not $TemplateFile) {
+    $TemplateFile = Find-FirstFile -Name $TemplateFileName -Dirs $searchDirs.ToArray()
+}
+if (-not $TemplateFile) {
+    throw ('{0} was not found (searched {1}); pass -TemplateFile <path>' -f $TemplateFileName, $searchDirsText)
+}
+$TemplateFile = Resolve-ExistingFile -Path $TemplateFile -What 'template'
+
+if ([string]::IsNullOrWhiteSpace($Title)) {
+    throw 'Title must be a non-empty string'
+}
+
+# ---------------------------------------------------------------------------
+# Helpers (Snap2HTML 2.5 encoding / formatting)
+# ---------------------------------------------------------------------------
+
+function Get-JavaScriptString {
+    # HttpUtility.JavaScriptStringEncode() with default settings, including
+    # the surrounding quotes. Used for names inside p([...]) data lines.
+    # AllowEmptyString: PowerShell treats '' as "missing" on Mandatory
+    # [string] params, but linkRoot (and similar) is legitimately empty.
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    foreach ($ch in $Value.ToCharArray()) {
+        $code = [int]$ch
+        if     ($code -eq 34)  { [void]$sb.Append('\"') }
+        elseif ($code -eq 92)  { [void]$sb.Append('\\') }
+        elseif ($code -eq 10)  { [void]$sb.Append('\n') }
+        elseif ($code -eq 13)  { [void]$sb.Append('\r') }
+        elseif ($code -eq 9)   { [void]$sb.Append('\t') }
+        elseif ($code -eq 8)   { [void]$sb.Append('\b') }
+        elseif ($code -eq 12)  { [void]$sb.Append('\f') }
+        elseif ($code -lt 32 -or $code -eq 38 -or $code -eq 39 -or
+                $code -eq 60 -or $code -eq 62 -or $code -eq 0x85 -or
+                $code -eq 0x2028 -or $code -eq 0x2029) {
+            [void]$sb.AppendFormat('\u{0:x4}', $code)
+        }
+        else { [void]$sb.Append($ch) }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function ConvertTo-Base36 {
+    param([Parameter(Mandatory = $true)][long]$Number)
+    if ($Number -lt 0) { return ('-' + (ConvertTo-Base36 (-$Number))) }
+    if ($Number -eq 0) { return '0' }
+    $digits = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    $sb = New-Object System.Text.StringBuilder
+    while ($Number -gt 0) {
+        $rem = [long]0
+        $Number = [Math]::DivRem($Number, 36, [ref]$rem)
+        [void]$sb.Insert(0, $digits[[int]$rem])
+    }
+    return $sb.ToString()
+}
+
+function ConvertFrom-Base36 {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$WhatValue = 'base-36 number'
+    )
+    if ($Value -notmatch '^[0-9A-Za-z]+$') {
+        throw ('{0}: {1} is not a valid base-36 number: ''{2}''' -f $Path, $WhatValue, $Value)
+    }
+    $v = [long]0
+    foreach ($ch in $Value.ToCharArray()) {
+        $d = [int]$ch
+        if     ($d -ge 48 -and $d -le 57) { $d -= 48 }
+        elseif ($d -ge 65 -and $d -le 90) { $d -= 55 }
+        else                              { $d -= 87 }
+        $v = $v * 36 + $d
+    }
+    return $v
+}
+
+function Get-CSharpFileSize {
+    # Utils.BytesToFilesize() - what Snap2HTML writes into [TOT SIZE].
+    param(
+        [Parameter(Mandatory = $true)][long]$Bytes,
+        [string]$DecimalSeparator = '.'
+    )
+    $kb = 1024L; $mb = 1048576L; $gb = 1073741824L; $tb = 1099511627776L
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
+    if ($Bytes -ge 0 -and $Bytes -lt $kb) { return ('' + $Bytes + ' bytes') }
+    if     ($Bytes -lt $mb) { $val = $Bytes / $kb; $dec = 0; $unit = 'KB' }
+    elseif ($Bytes -lt $gb) { $val = $Bytes / $mb; $dec = 1; $unit = 'MB' }
+    elseif ($Bytes -lt $tb) { $val = $Bytes / $gb; $dec = 2; $unit = 'GB' }
+    else                    { $val = $Bytes / $tb; $dec = 2; $unit = 'TB' }
+    $r = [Math]::Round($val, $dec)
+    if ($dec -eq 0) { $s = [string]::Format($inv, '{0:0}', $r) }
+    else {
+        $fmt = '{0:0.' + ('#' * $dec) + '}'
+        $s = [string]::Format($inv, $fmt, $r)
+    }
+    return ($s.Replace('.', $DecimalSeparator) + ' ' + $unit)
+}
+
+function Get-PaddedDigits {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Text,
+        [Parameter(Mandatory = $true)][int]$Width
+    )
+    $sb = New-Object System.Text.StringBuilder
+    $i = 0
+    while ($i -lt $Text.Length) {
+        $c = $Text[$i]
+        if ($c -ge '0' -and $c -le '9') {
+            $j = $i
+            while ($j -lt $Text.Length -and $Text[$j] -ge '0' -and $Text[$j] -le '9') { $j++ }
+            [void]$sb.Append($Text.Substring($i, $j - $i).PadLeft($Width, '0'))
+            $i = $j
+        }
+        else {
+            [void]$sb.Append($c)
+            $i++
+        }
+    }
+    return $sb.ToString()
+}
+
+function Get-V2NaturalKeys {
+    # Snap2HTML's natural sort: pad every run of digits to the widest run in
+    # the set, then compare case-insensitively ('folder 2' before 'folder 10').
+    param([Parameter(Mandatory = $true)][string[]]$Names)
+    $maxDigits = 0
+    foreach ($n in $Names) {
+        foreach ($m in [regex]::Matches($n, '\d+')) {
+            if ($m.Value.Length -gt $maxDigits) { $maxDigits = $m.Value.Length }
+        }
+    }
+    $keys = [string[]]::new($Names.Count)
+    for ($i = 0; $i -lt $Names.Count; $i++) {
+        $keys[$i] = Get-PaddedDigits -Text $Names[$i] -Width $maxDigits
+    }
+    return $keys
+}
+
+function ConvertTo-JsMetaObject {
+    # DataContractJsonSerializer-style compact object, keys in the given
+    # order, forward slashes escaped as '\/'.
+    param([Parameter(Mandatory = $true)][object]$Object)
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('{')
+    $first = $true
+    foreach ($prop in $Object.PSObject.Properties) {
+        if (-not $first) { [void]$sb.Append(',') }
+        $first = $false
+        $name = Get-JavaScriptString ([string]$prop.Name)
+        # Get-JavaScriptString also encodes <>&' which JSON does not need,
+        # but the key names here are plain ASCII identifiers.
+        [void]$sb.Append($name)
+        [void]$sb.Append(':')
+        $v = $prop.Value
+        if ($v -is [string]) {
+            $enc = Get-JavaScriptString $v
+            [void]$sb.Append($enc.Replace('/', '\/'))
+        }
+        else {
+            [void]$sb.Append(([long]$v).ToString([System.Globalization.CultureInfo]::InvariantCulture))
+        }
+    }
+    [void]$sb.Append('}')
+    return $sb.ToString()
+}
+
+function Get-HtmlEncoded {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+    return [System.Net.WebUtility]::HtmlEncode($Value)
+}
+
+function Get-JsStringInner {
+    # Inner (unquoted) JS string for use inside the already-quoted
+    # title: "..." SNAPMETA field.
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+    $q = Get-JavaScriptString $Value
+    return $q.Substring(1, $q.Length - 2)
+}
+
+function Get-UnixSeconds {
+    $epoch = [datetime]::SpecifyKind([datetime]'1970-01-01', 'Utc')
+    return [int64]([datetime]::UtcNow - $epoch).TotalSeconds
+}
+
+function Read-Utf8File {
+    # Inputs are UTF-8 with a BOM and CRLF; template.html is UTF-8 without a
+    # BOM and LF. Strip the BOM so it never leaks into the parsed data.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    $enc = [System.Text.UTF8Encoding]::new($false, $true)
+    if ($hasBom) { $text = $enc.GetString($bytes, 3, $bytes.Length - 3) }
+    else         { $text = $enc.GetString($bytes) }
+    return @{ Text = $text; HasBom = $hasBom }
+}
+
+function Invoke-TemplateFill {
+    # Replace [PLACEHOLDER] tokens in a Snap2HTML-style template. Literal
+    # String.Replace (not regex), so '$' and '\' in the injected data are
+    # never reinterpreted. Longer tokens must come first in $Replacements so
+    # that e.g. [PAGE TITLE JS] is not eaten by [PAGE TITLE].
+    param(
+        [Parameter(Mandatory = $true)][string]$Template,
+        [Parameter(Mandatory = $true)][string]$TemplatePath,
+        [Parameter(Mandatory = $true)]$Replacements
+    )
+    if ($Template.IndexOf('[DIR DATA]', [System.StringComparison]::Ordinal) -lt 0) {
+        throw ('{0}: does not look like a Snap2HTML template ([DIR DATA] placeholder missing)' -f $TemplatePath)
+    }
+    $out = $Template
+    foreach ($key in $Replacements.Keys) {
+        $count = ([regex]::Matches($out, [regex]::Escape($key))).Count
+        if ($key -eq '[DIR DATA]') {
+            # The data blob must be injected exactly once. It has to sit on a
+            # line of its own: inside a '//' comment the first p([...]) entry
+            # would be commented out and silently disappear.
+            if ($count -ne 1) {
+                throw ('{0}: [DIR DATA] must appear exactly once, found {1}' -f $TemplatePath, $count)
+            }
+        }
+        elseif ($count -lt 1) {
+            Write-Warning ('{0}: template placeholder {1} was not found' -f $TemplatePath, $key)
+        }
+        $out = $out.Replace($key, [string]$Replacements[$key])
+    }
+    $leftover = [regex]::Match($out,
+        '\[(PAGE TITLE JS|PAGE TITLE|BODY TITLE|DIR DATA|NUM FILES|NUM DIRS|TOT BYTES|TOT SIZE|GEN DATE|GEN TIME|GEN TIMESTAMP|APP NAME|APP VER|APP LINK|DATA VER)\]')
+    if ($leftover.Success) {
+        throw ('{0}: template placeholder {1} was not replaced' -f $TemplatePath, $leftover.Value)
+    }
+    return $out
+}
+
+function Add-ProvenanceNote {
+    # Insert our own HTML comment directly after the generator's comment.
+    # Requires exactly one anchor so we never touch an unrelated comment;
+    # returns the text unchanged when the anchor is absent.
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Note
+    )
+    $rxNote = [regex]'(?m)^(<!-- This file was generated by .*?-->\r?)$'
+    if (($rxNote.Matches($Text)).Count -ne 1) { return $Text }
+    return $rxNote.Replace($Text, ('${1}' + "`n" + $Note.Replace('$', '$$')), 1)
+}
+
+function Write-Utf8NoBom {
+    # Match template.html: UTF-8 without a BOM, LF line endings.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $Text, $utf8NoBom)
+}
+
+# ---------------------------------------------------------------------------
+# V2 data-line parsing (prefix only: name / parent / refs)
+# ---------------------------------------------------------------------------
+
+$script:PLinePrefixRx = [regex]::new(
+    '^p\(\["((?:\\.|[^"\\])*)",(-?\d+),"((?:\\.|[^"\\])*)"(.*)$',
+    [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+)
+
+function ConvertFrom-PLine {
+    # Split a p([...]) line into folder-item / parent / refs / rest without
+    # re-parsing the (potentially huge) file list. The folder item is the
+    # already-escaped inner JSON string 'name*size*date'.
+    param(
+        [Parameter(Mandatory = $true)][string]$Line,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [int]$Index = 0
+    )
+    $m = $script:PLinePrefixRx.Match($Line)
+    if (-not $m.Success) {
+        $excerpt = $Line.Substring(0, [Math]::Min(80, $Line.Length))
+        throw ('{0}: cannot parse data line {1}: {2}' -f $Path, ($Index + 1), $excerpt)
+    }
+    $folderItem = $m.Groups[1].Value
+    $parts = $folderItem.Split('*')
+    if ($parts.Count -ne 3) {
+        throw ('{0}: dirs[{1}][0] must be ''name*size*date''' -f $Path, $Index)
+    }
+    # Decode the (JS-escaped) folder name via JSON.
+    try {
+        $name = [string](ConvertFrom-Json -InputObject ('"' + $parts[0] + '"'))
+    }
+    catch {
+        $name = $parts[0]
+    }
+    $sizeStr = $parts[1]
+    if ($sizeStr -eq '-1') { $size = [long]-1 }
+    else {
+        $size = ConvertFrom-Base36 -Value $sizeStr -Path $Path -WhatValue ("dirs[$Index] folder size")
+    }
+    $ts = ConvertFrom-Base36 -Value $parts[2] -Path $Path -WhatValue ("dirs[$Index] folder date")
+    $parent = [int]$m.Groups[2].Value
+    $refsStr = $m.Groups[3].Value
+    $refs = New-Object System.Collections.Generic.List[int]
+    if ($refsStr -ne '') {
+        foreach ($r in ($refsStr -split '\*')) {
+            if ($r -notmatch '^\d+$') {
+                throw ('{0}: dirs[{1}] has a non-decimal subfolder id: ''{2}''' -f $Path, $Index, $r)
+            }
+            $refs.Add([int]$r)
+        }
+    }
+    return [pscustomobject]@{
+        Raw        = $Line
+        FolderItem = $folderItem
+        Name       = $name
+        Size       = $size
+        Ts         = $ts
+        Parent     = $parent
+        Refs       = $refs
+        RefsStr    = $refsStr
+        Rest       = $m.Groups[4].Value
+        IsRoot     = ($parent -eq -1)
+    }
+}
+
+function Split-PRestElements {
+    # Split the tail of a p([...]) line (everything after the subfolder-refs
+    # string) into its top-level elements. JS string escaping and nested
+    # braces are honoured, so a file name containing ',' '{' or ']' cannot
+    # confuse the split. The trailing '])' is removed.
+    # Only ever used on root lines, which are short - non-root lines keep
+    # their tail verbatim because their file lists can be huge.
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Rest
+    )
+    $s = $Rest
+    if ($s.StartsWith(',')) { $s = $s.Substring(1) }
+    if ($s.EndsWith('])'))   { $s = $s.Substring(0, $s.Length - 2) }
+
+    $elems = New-Object System.Collections.Generic.List[string]
+    if ($s -eq '') { return ,$elems }
+
+    $sb = New-Object System.Text.StringBuilder
+    $inStr = $false
+    $esc = $false
+    $depth = 0
+    # Integer comparisons (as in Get-JavaScriptString) so behaviour does not
+    # depend on how PowerShell coerces [char] vs [string] with -eq.
+    $QUOT = 34; $BSL = 92; $COMMA = 44
+    $CURLY_O = 123; $CURLY_C = 125; $SQ_O = 91; $SQ_C = 93
+    foreach ($ch in $s.ToCharArray()) {
+        $code = [int]$ch
+        if ($inStr) {
+            [void]$sb.Append($ch)
+            if     ($esc)                 { $esc = $false }
+            elseif ($code -eq $BSL)       { $esc = $true }
+            elseif ($code -eq $QUOT)      { $inStr = $false }
+            continue
+        }
+        if     ($code -eq $QUOT) { $inStr = $true; [void]$sb.Append($ch) }
+        elseif ($code -eq $CURLY_O -or $code -eq $SQ_O) { $depth++; [void]$sb.Append($ch) }
+        elseif ($code -eq $CURLY_C -or $code -eq $SQ_C) { $depth--; [void]$sb.Append($ch) }
+        elseif ($code -eq $COMMA -and $depth -eq 0) {
+            $elems.Add($sb.ToString())
+            [void]$sb.Clear()
+        }
+        else { [void]$sb.Append($ch) }
+    }
+    if ($sb.Length -gt 0) { $elems.Add($sb.ToString()) }
+    return ,$elems
+}
+
+function Get-RootLineParts {
+    # A root line ends with a metadata object: p(["...",-1,"refs",<files...>,{...}])
+    # Returns the loose file elements (usually none) and the metadata text.
+    param(
+        [Parameter(Mandatory = $true)]$Parsed,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $elems = Split-PRestElements -Rest $Parsed.Rest
+    $metaJson = $null
+    $fileElems = New-Object System.Collections.Generic.List[string]
+    if ($elems.Count -gt 0) {
+        $last = $elems[$elems.Count - 1]
+        if ($last.StartsWith('{') -and $last.EndsWith('}')) {
+            $metaJson = $last
+            for ($i = 0; $i -lt $elems.Count - 1; $i++) { $fileElems.Add($elems[$i]) }
+        }
+    }
+    if (-not $metaJson) {
+        throw ('{0}: root folder entry has no trailing metadata object' -f $Path)
+    }
+    return [pscustomobject]@{
+        MetaJson  = $metaJson
+        FileElems = $fileElems
+    }
+}
+
+function Get-RemappedPLine {
+    # Rebuild a non-root p([...]) line with parent/refs shifted by $Offset.
+    # Direct children of the old root (parent 0) stay parent 0 so they hang
+    # off the new synthetic root. The file list (Rest) is preserved
+    # byte-for-byte.
+    param(
+        [Parameter(Mandatory = $true)]$Parsed,
+        [Parameter(Mandatory = $true)][int]$Offset
+    )
+    if ($Parsed.IsRoot) {
+        throw 'Get-RemappedPLine cannot emit a root entry'
+    }
+    if ($Parsed.Parent -eq 0) { $parent = 0 }
+    else                      { $parent = $Parsed.Parent + $Offset }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('p(["')
+    [void]$sb.Append($Parsed.FolderItem)
+    [void]$sb.Append('",')
+    [void]$sb.Append($parent)
+    [void]$sb.Append(',"')
+    $first = $true
+    foreach ($r in $Parsed.Refs) {
+        if (-not $first) { [void]$sb.Append('*') }
+        $first = $false
+        [void]$sb.Append(($r + $Offset))
+    }
+    [void]$sb.Append('"')
+    [void]$sb.Append($Parsed.Rest)
+    return $sb.ToString()
+}
+
+function Get-SnapDataLines {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $startTag = '// [SNAPDATA]'
+    $endTag   = '// [/SNAPDATA]'
+    $sIdx = $Text.IndexOf($startTag, [System.StringComparison]::Ordinal)
+    $eIdx = $Text.IndexOf($endTag,   [System.StringComparison]::Ordinal)
+    if ($sIdx -lt 0 -or $eIdx -lt 0 -or $eIdx -le $sIdx) {
+        throw ('{0}: not a Snap2HTML 2.5+ snapshot ([SNAPDATA] markers missing)' -f $Path)
+    }
+    $region = $Text.Substring($sIdx + $startTag.Length, ($eIdx - $sIdx - $startTag.Length))
+    $parsed = New-Object System.Collections.Generic.List[object]
+    $i = 0
+    foreach ($line in ($region -split "`n")) {
+        $line = $line.TrimEnd("`r")
+        if ($line.Trim() -eq '') { continue }
+        $parsed.Add((ConvertFrom-PLine -Line $line -Path $Path -Index $i))
+        $i++
+    }
+    if ($parsed.Count -lt 1) {
+        throw ('{0}: no p(...) data lines found' -f $Path)
+    }
+    if (-not $parsed[0].IsRoot) {
+        throw ('{0}: the first folder entry must be a root folder' -f $Path)
+    }
+    return ,$parsed
+}
+
+function Get-SnapMeta {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $sIdx = $Text.IndexOf('// [SNAPMETA]', [System.StringComparison]::Ordinal)
+    $eIdx = $Text.IndexOf('// [/SNAPMETA]', [System.StringComparison]::Ordinal)
+    if ($sIdx -lt 0 -or $eIdx -lt 0 -or $eIdx -le $sIdx) {
+        throw ('{0}: [SNAPMETA] block missing' -f $Path)
+    }
+    $block = $Text.Substring($sIdx, ($eIdx - $sIdx))
+    function Grab([string]$Pattern, [string]$Label) {
+        $m = [regex]::Match($block, $Pattern)
+        if (-not $m.Success) { throw ('{0}: could not find snap.{1}' -f $Path, $Label) }
+        return $m.Groups[1].Value
+    }
+    $dataVer = [int](Grab '(?m)^\s*dataVersion:\s*(\d+)' 'dataVersion')
+    if ($dataVer -ne 2) {
+        throw ('{0}: unsupported data version {1} (need Snap2HTML 2.5+ / dataVersion 2)' -f $Path, $dataVer)
+    }
+    return [pscustomobject]@{
+        Title       = Grab 'title:\s*"((?:[^"\\]|\\.)*)"' 'title'
+        Timestamp   = [int64](Grab '(?m)^\s*timestamp:\s*(\d+)' 'timestamp')
+        NumFiles    = [int64](Grab '(?m)^\s*numFiles:\s*(\d+)' 'numFiles')
+        NumDirs     = [int64](Grab '(?m)^\s*numDirs:\s*(\d+)' 'numDirs')
+        Bytes       = [int64](Grab '(?m)^\s*bytes:\s*(\d+)' 'bytes')
+        AppName     = Grab 'appName:\s*"((?:[^"\\]|\\.)*)"' 'appName'
+        AppLink     = Grab 'appLink:\s*"((?:[^"\\]|\\.)*)"' 'appLink'
+        AppVersion  = Grab 'appVersion:\s*"((?:[^"\\]|\\.)*)"' 'appVersion'
+        DataVersion = $dataVer
+    }
+}
+
+function Unescape-JsString {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+    if ($Value -eq '') { return '' }
+    try { return [string](ConvertFrom-Json -InputObject ('"' + $Value + '"')) }
+    catch { return $Value }
+}
+
+# ---------------------------------------------------------------------------
+# Load inputs
+# ---------------------------------------------------------------------------
+
+$snapshots = @()
+foreach ($path in $resolvedInputs) {
+    Write-Host ('Reading {0}' -f $path)
+    $read = Read-Utf8File -Path $path
+    $meta = Get-SnapMeta -Text $read.Text -Path $path
+    $lines = Get-SnapDataLines -Text $read.Text -Path $path
+    if ($lines.Count -ne [int]$meta.NumDirs) {
+        throw ('{0}: snap.numDirs is {1} but the data contains {2} folders' -f $path, $meta.NumDirs, $lines.Count)
+    }
+    $rootParts = Get-RootLineParts -Parsed $lines[0] -Path $path
+    $snapshots += [pscustomobject]@{
+        Path      = $path
+        Name      = (Split-Path -Leaf $path)
+        Meta      = $meta
+        Lines     = $lines
+        Root      = $lines[0]
+        RootParts = $rootParts
+        Children  = @($lines | Select-Object -Skip 1)
+    }
+}
+
+foreach ($snap in $snapshots) {
+    $nRoot = 0
+    foreach ($e in $snap.Lines) { if ($e.IsRoot) { $nRoot++ } }
+    if ($nRoot -ne 1) {
+        throw ('{0}: expected a single root folder, found {1}' -f $snap.Path, $nRoot)
+    }
+    foreach ($e in $snap.Children) {
+        if ($e.Parent -lt 0 -or $e.Parent -ge $snap.Lines.Count) {
+            throw ('{0}: folder ''{1}'' has parent id {2} out of range' -f $snap.Path, $e.Name, $e.Parent)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Flatten every input's movie folders under a synthetic $Title root
+# ---------------------------------------------------------------------------
+
+# Final layout:
+#   index 0              = synthetic root ($Title)
+#   1 .. n0              = non-root folders of input 0 (ids unchanged)
+#   n0+1 ..              = non-root folders of input 1, ids shifted by n0
+#   ...
+# Direct children of each old root (parent 0) become children of the new root.
+
+$outLines = New-Object System.Collections.Generic.List[string]
+$topLevel = New-Object System.Collections.Generic.List[object]   # @{ Id; Name; Size }
+$offset = 0
+$rootTs = [int64]0
+$rootUnreadable = $false
+$dupNames = @{}
+
+$droppedFiles = [int64]0
+$droppedBytes = [int64]0
+$keptRootFileElems = New-Object System.Collections.Generic.List[string]
+$keptRootFileBytes = [int64]0
+
+foreach ($snap in $snapshots) {
+    $nKeep = $snap.Children.Count
+
+    # Loose files sitting directly in the drive root (e.g. L:\msdia80.dll).
+    $loose = @($snap.RootParts.FileElems)
+    $looseBytes = [int64]0
+    foreach ($fe in $loose) {
+        $fp = $fe.Split('*')
+        if ($fp.Count -ge 2 -and $fp[1] -ne '-1') {
+            try { $looseBytes += ConvertFrom-Base36 -Value $fp[1] -Path $snap.Path -WhatValue 'file size' }
+            catch { }
+        }
+    }
+
+    if ($KeepRootFiles) {
+        foreach ($fe in $loose) { $keptRootFileElems.Add($fe) }
+        $keptRootFileBytes += $looseBytes
+        if ($loose.Count -gt 0) {
+            $looseNote = (', keeping {0} loose file(s) on the synthetic root' -f $loose.Count)
+        }
+        else { $looseNote = '' }
+    }
+    else {
+        $droppedFiles += $loose.Count
+        $droppedBytes += $looseBytes
+        if ($loose.Count -gt 0) {
+            $looseNote = (', discarding {0} loose file(s) at the drive root' -f $loose.Count)
+        }
+        else { $looseNote = '' }
+    }
+
+    Write-Host ('  {0}: {1} folders (dropping root ''{2}'', keeping {3} movie folders{4})' -f `
+        $snap.Name, $snap.Lines.Count, $snap.Root.Name, $nKeep, $looseNote)
+
+    if ($snap.Root.Size -eq -1) { $rootUnreadable = $true }
+    if ($snap.Root.Ts -gt $rootTs) { $rootTs = $snap.Root.Ts }
+
+    foreach ($childId in $snap.Root.Refs) {
+        if ($childId -le 0 -or $childId -ge $snap.Lines.Count) {
+            throw ('{0}: root references invalid subfolder id {1}' -f $snap.Path, $childId)
+        }
+        $child = $snap.Lines[$childId]
+        $newId = $childId + $offset
+        $key = $child.Name.ToLowerInvariant()
+        if ($dupNames.ContainsKey($key)) {
+            Write-Warning ('duplicate top-level folder name ''{0}'' (from {1} and {2}); keeping both' -f `
+                $child.Name, $dupNames[$key], $snap.Name)
+        }
+        else { $dupNames[$key] = $snap.Name }
+        $topLevel.Add([pscustomobject]@{ Id = $newId; Name = $child.Name; Size = $child.Size })
+    }
+
+    foreach ($e in $snap.Children) {
+        if ($offset -eq 0) {
+            $outLines.Add($e.Raw)
+        }
+        else {
+            $outLines.Add((Get-RemappedPLine -Parsed $e -Offset $offset))
+        }
+    }
+    $offset += $nKeep
+}
+
+$nDirs = $outLines.Count + 1   # + synthetic root
+
+# Header counters: the inputs' own totals, minus whatever we discarded.
+$nFiles = [int64]0
+$nBytes = [int64]0
+foreach ($snap in $snapshots) {
+    $nFiles += $snap.Meta.NumFiles
+    $nBytes += $snap.Meta.Bytes
+}
+if (-not $KeepRootFiles) {
+    $nFiles -= $droppedFiles
+    $nBytes -= $droppedBytes
+}
+if ($nFiles -lt 0) { $nFiles = [int64]0 }
+if ($nBytes -lt 0) { $nBytes = [int64]0 }
+
+# Sanity check: the synthetic root's size should equal the sum of the
+# top-level folder sizes (each a recursive subtree total) plus any loose
+# files we kept. Snap2HTML maintains that invariant, so a mismatch means an
+# input was already inconsistent.
+$childSizeSum = [int64]0
+foreach ($t in $topLevel) {
+    if ($t.Size -eq -1) { $rootUnreadable = $true }
+    else                { $childSizeSum += $t.Size }
+}
+$expectedBytes = $childSizeSum + $keptRootFileBytes
+if (-not $rootUnreadable -and $expectedBytes -ne $nBytes) {
+    Write-Warning ('combined folder sizes ({0} bytes) do not match the recomputed total ({1} bytes); using the folder sizes' -f `
+        $expectedBytes, $nBytes)
+    $nBytes = $expectedBytes
+}
+
+if (-not $KeepOrder -and $topLevel.Count -gt 1) {
+    $names = [string[]]::new($topLevel.Count)
+    $ids   = [int[]]::new($topLevel.Count)
+    for ($k = 0; $k -lt $topLevel.Count; $k++) {
+        $names[$k] = $topLevel[$k].Name
+        $ids[$k]   = $topLevel[$k].Id
+    }
+    $keys = Get-V2NaturalKeys -Names $names
+    [Array]::Sort($keys, $ids, [System.StringComparer]::OrdinalIgnoreCase)
+    $rootRefsStr = ($ids -join '*')
+}
+else {
+    $ids = New-Object System.Collections.Generic.List[int]
+    foreach ($t in $topLevel) { $ids.Add([int]$t.Id) }
+    $rootRefsStr = ($ids -join '*')
+}
+
+if ($rootUnreadable) { $deep36 = '-1' }
+else                 { $deep36 = ConvertTo-Base36 ([long]$nBytes) }
+
+$nowUnix = Get-UnixSeconds
+$metaObj = [pscustomobject]([ordered]@{
+    linkRoot  = ''
+    numDirs   = $nDirs
+    numFiles  = $nFiles
+    sourceDir = $Title
+    timestamp = $nowUnix
+    title     = $Title
+    totBytes  = $nBytes
+})
+$metaJson = ConvertTo-JsMetaObject -Object $metaObj
+
+# Loose files kept on the synthetic root, if any (each already a quoted JS
+# string; re-joined with the leading separators the data format expects).
+$rootFilesRaw = ''
+if ($keptRootFileElems.Count -gt 0) {
+    $rootFilesRaw = ',' + ($keptRootFileElems -join ',')
+}
+
+$nameInner = (Get-JavaScriptString $Title)
+$nameInner = $nameInner.Substring(1, $nameInner.Length - 2)
+$rootLine = 'p(["{0}*{1}*{2}",-1,"{3}"{4},{5}])' -f `
+    $nameInner, $deep36, (ConvertTo-Base36 $rootTs), $rootRefsStr, $rootFilesRaw, $metaJson
+
+$dirLines = New-Object System.Collections.Generic.List[string]
+$dirLines.Add($rootLine)
+foreach ($ln in $outLines) { $dirLines.Add($ln) }
+$dirData = ($dirLines -join "`n") + "`n"
+
+Write-Host ('Combined {0} movie folders under root ''{1}'' ({2} folders, {3} files)' -f `
+    $topLevel.Count, $Title, $nDirs, $nFiles)
+
+# ---------------------------------------------------------------------------
+# Fill the templates
+# ---------------------------------------------------------------------------
+
+$baseMeta = $snapshots[0].Meta
+$appName = Unescape-JsString $baseMeta.AppName
+$appLink = Unescape-JsString $baseMeta.AppLink
+$appVer  = Unescape-JsString $baseMeta.AppVersion
+if ([string]::IsNullOrWhiteSpace($appName)) { $appName = 'Snap2HTML' }
+if ([string]::IsNullOrWhiteSpace($appLink)) { $appLink = 'https://www.rlvision.com' }
+if ([string]::IsNullOrWhiteSpace($appVer))  { $appVer  = '2.52' }
+
+$enUS = [System.Globalization.CultureInfo]::GetCultureInfo('en-US')
+$now  = Get-Date
+$genDate = $now.ToString('M/d/yyyy', $enUS)
+$genTime = $now.ToString('h:mm tt', $enUS)
+$totSize = Get-CSharpFileSize -Bytes $nBytes
+
+$pageTitleHtml = Get-HtmlEncoded $Title
+$bodyTitle     = (Get-HtmlEncoded $Title).Replace('\', '\<wbr>')
+$pageTitleJs   = Get-JsStringInner $Title
+
+$inputNames = ($snapshots | ForEach-Object { $_.Name }) -join ', '
+$today = $now.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+$note = '<!-- Consolidated from {0} using allmovies.ps1 on {1} -->' -f $inputNames, $today
+
+# --- 1. the Snap2HTML snapshot --------------------------------------------
+
+$tplRead = Read-Utf8File -Path $TemplateFile
+
+# Longer tokens first so [PAGE TITLE JS] is not eaten by [PAGE TITLE].
+$replacements = [ordered]@{
+    '[PAGE TITLE JS]' = $pageTitleJs
+    '[PAGE TITLE]'    = $pageTitleHtml
+    '[BODY TITLE]'    = $bodyTitle
+    '[APP NAME]'      = (Get-HtmlEncoded $appName)
+    '[APP VER]'       = (Get-HtmlEncoded $appVer)
+    '[APP LINK]'      = $appLink
+    '[GEN TIMESTAMP]' = ([string]$nowUnix)
+    '[GEN DATE]'      = $genDate
+    '[GEN TIME]'      = $genTime
+    '[NUM FILES]'     = ([string]$nFiles)
+    '[NUM DIRS]'      = ([string]$nDirs)
+    '[TOT BYTES]'     = ([string]$nBytes)
+    '[TOT SIZE]'      = $totSize
+    '[DATA VER]'      = '2'
+    '[DIR DATA]'      = $dirData
+}
+
+$output = Invoke-TemplateFill -Template $tplRead.Text -TemplatePath $TemplateFile -Replacements $replacements
+$output = Add-ProvenanceNote -Text $output -Note $note
+Write-Utf8NoBom -Path $OutputFile -Text $output
+
+# --- 2. the card-based landing page ---------------------------------------
+#
+# The landing page embeds the very same $dirData and decodes it with the same
+# Snap2HTML V2 rules, so it can never drift from the snapshot. All the messy
+# work (grouping 'INDEX__Title__YEAR.ext' file names into movies) happens in
+# the page's own JavaScript at load time, not here.
+
+if ($buildLanding) {
+    $landingRead = Read-Utf8File -Path $LandingTemplate
+    $landingReplacements = [ordered]@{
+        '[PAGE TITLE]' = $pageTitleHtml
+        '[BODY TITLE]' = $pageTitleHtml
+        '[APP NAME]'   = (Get-HtmlEncoded $appName)
+        '[APP VER]'    = (Get-HtmlEncoded $appVer)
+        '[APP LINK]'   = $appLink
+        '[GEN DATE]'   = $genDate
+        '[GEN TIME]'   = $genTime
+        '[NUM FILES]'  = ([string]$nFiles)
+        '[NUM DIRS]'   = ([string]$nDirs)
+        '[TOT SIZE]'   = $totSize
+        '[DIR DATA]'   = $dirData
+    }
+    $landingOut = Invoke-TemplateFill -Template $landingRead.Text -TemplatePath $LandingTemplate -Replacements $landingReplacements
+    $landingOut = Add-ProvenanceNote -Text $landingOut -Note $note
+    Write-Utf8NoBom -Path $LandingFile -Text $landingOut
+}
+
+# --- summary --------------------------------------------------------------
+
+Write-Host ''
+Write-Host ('Wrote {0}' -f $OutputFile)
+Write-Host ('  Title:   {0}' -f $Title)
+Write-Host ('  Root:    {0} ({1} movie folders from {2} snapshots)' -f $Title, $topLevel.Count, $snapshots.Count)
+Write-Host ('  Folders: {0}' -f $nDirs)
+Write-Host ('  Files:   {0}' -f $nFiles)
+Write-Host ('  Total:   {0}' -f $totSize)
+if ($buildLanding) {
+    Write-Host ('Wrote {0}' -f $LandingFile)
+    Write-Host ('  Card-based landing page built from the same {0} folder entries' -f $nDirs)
+}
+if (-not $KeepRootFiles -and $droppedFiles -gt 0) {
+    Write-Host ('  Note:    {0} loose file(s) at the drive root were discarded ({1}); use -KeepRootFiles to keep them' -f `
+        $droppedFiles, (Get-CSharpFileSize -Bytes $droppedBytes))
+}
