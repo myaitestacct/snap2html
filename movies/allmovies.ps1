@@ -48,19 +48,55 @@
     Use -SkipLanding to emit only the snapshot. File links are disabled (linkRoot "") because the merged
     tree spans several drives, so no single link root can be correct.
 
+    Default folder, and asking when it is empty
+    -------------------------------------------
+    Inputs are looked for in
+    D:\entertainment\collecting\snap2html_directory_listing and both artifacts
+    are written back there, so with the collection in place the script needs
+    no arguments at all.
+
+    If that folder holds no Movies_*.html, the script asks instead of failing:
+    it prompts for input files one at a time until you press Enter on an empty
+    line or type 'done'. Each answer may be a single file, a folder (its
+    Movies_*.html files are used) or a wildcard path, and every answer is
+    checked as you type it - a path that matches nothing is reported and
+    asked again rather than silently skipped. 'list' reviews what has been
+    collected and 'clear' starts over.
+
+    Once you are done it asks for the output file name and location as a
+    second question, showing the default in brackets; press Enter to accept
+    it. A bare file name is placed in that same default folder, and the
+    landing page is written beside whatever you choose.
+
+    Explicit -InputFiles / -OutputFile always win over prompting, so the
+    script stays fully scriptable. -NoPrompt disables the questions for
+    unattended runs, and -Prompt asks them even when snapshots were found.
+
     Works with Windows PowerShell 5.1 and PowerShell 7+.
 
 .PARAMETER InputFiles
-    Snapshot files to consolidate. Defaults to every Movies_*.html next to
-    this script, in name order. Wildcards are expanded, and the output file
-    is never treated as an input.
+    Snapshot files to consolidate. Default: every Movies_*.html in
+    D:\entertainment\collecting\snap2html_directory_listing, in name order.
+    Each entry may be a single file, a folder (its Movies_*.html files are
+    used) or a wildcard path. Wildcards are expanded, and neither output file
+    is ever treated as an input.
+
+    If nothing matches in the default folder the script prompts for the files
+    one at a time instead - see the description above. Supplying this
+    parameter skips that prompting entirely.
 
 .PARAMETER OutputFile
-    Destination HTML file. Default: search_movies.html next to this script.
+    Destination snapshot. Default: search_movies.html in
+    D:\entertainment\collecting\snap2html_directory_listing. When the inputs
+    were asked for interactively, this is asked for too, with the default
+    shown in brackets (Enter accepts it). The folder is created if needed,
+    unless its drive is missing - then results go next to the first input.
 
 .PARAMETER TemplateFile
-    Snap2HTML 2.5 template.html to fill. Default: template.html in the
-    repository root (the parent of this script's folder).
+    Snap2HTML 2.5 template.html to fill. Default: the first template.html
+    found in this script's folder, then the repository root, then the default
+    folder above, then the current directory. A missing template is an error,
+    since nothing can be produced without it.
 
 .PARAMETER Title
     Name of the synthetic root folder and of the page title. Default: Movies.
@@ -74,35 +110,92 @@
     instead of re-sorting the combined top-level listing.
 
 .PARAMETER LandingTemplate
-    Landing page template to fill. Default: landing_template.html in the
-    repository root. If it is missing the landing page is skipped with a
-    warning (pass the parameter explicitly to make that an error instead).
+    Landing page template to fill. Default: the first landing_template.html
+    found in the same folders as -TemplateFile. If it is missing the landing
+    page is skipped with a warning (pass the parameter explicitly to make
+    that an error instead).
 
 .PARAMETER LandingFile
-    Destination landing page. Default: index.html in the repository root.
+    Destination landing page. Default: index.html in the same folder as the
+    snapshot, so the page's relative 'Tree view' link keeps working.
 
 .PARAMETER SkipLanding
     Write only the Snap2HTML snapshot, not the landing page.
 
-.EXAMPLE
-    PS> .\movies\allmovies.ps1
+.PARAMETER Prompt
+    Ask for the inputs and the output even when Movies_*.html files were
+    found in the default folder. The files found are shown and become the
+    starting list, so this is how you add to them interactively.
 
-    Consolidates movies\Movies_I.html ... movies\Movies_N.html into
-    movies\search_movies.html with root/title 'Movies'.
-
-.EXAMPLE
-    PS> .\movies\allmovies.ps1 -KeepRootFiles -OutputFile search_movies.html
-
-    Same, but keeps stray drive-root files and writes to the repo root.
+.PARAMETER NoPrompt
+    Never ask. When no snapshot is found in the default folder, fail with an
+    error instead of prompting. Use this for scheduled or unattended runs.
 
 .EXAMPLE
-    PS> .\movies\allmovies.ps1 -SkipLanding
+    PS> .\allmovies.ps1
 
-    Rebuild only movies\search_movies.html, leaving index.html alone.
+    With the collection in D:\entertainment\collecting\snap2html_directory_listing,
+    merges every Movies_*.html there into search_movies.html and index.html in
+    the same folder, asking nothing:
+
+      Found 6 snapshot(s) in D:\entertainment\collecting\snap2html_directory_listing
+
+.EXAMPLE
+    PS> .\allmovies.ps1
+
+    Same command, but the default folder has no snapshots, so it asks:
+
+      No Movies_*.html snapshots were found in:
+        D:\entertainment\collecting\snap2html_directory_listing
+        (that folder does not exist)
+      ...
+      first input> E:\backups\Movies_I.html
+        + E:\backups\Movies_I.html
+      next input (1 so far)> E:\backups\old drives
+        + 5 files
+      next input (6 so far)> done
+
+      Using 6 input file(s):
+        ...
+      Output file name and location [D:\...\search_movies.html]> E:\merged.html
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -InputFiles D:\movies\Movies_*.html -OutputFile D:\out\m.html
+
+    Explicit paths, so nothing is prompted for.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -Prompt
+
+    Ask even though snapshots were found: shows them as the starting list so
+    you can add more before continuing.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -NoPrompt
+
+    Unattended: error out instead of prompting if the default folder is empty.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -KeepRootFiles
+
+    Same, but keeps stray drive-root files instead of discarding them.
+
+.EXAMPLE
+    PS> .\allmovies.ps1 -SkipLanding
+
+    Rebuild only search_movies.html, leaving index.html alone.
 
 .NOTES
     If script execution is blocked by policy, run it with:
-    powershell -ExecutionPolicy Bypass -File .\movies\allmovies.ps1
+    powershell -ExecutionPolicy Bypass -File .\allmovies.ps1
+
+    Note that -File runs the script non-interactively only in the sense that
+    arguments come from the command line; Read-Host still works in a normal
+    console. If the host cannot prompt, the script says so and tells you which
+    parameters to pass instead.
+
+    To point the script at a different collection permanently, edit
+    $DefaultDir near the top of the file.
 #>
 [CmdletBinding()]
 param(
@@ -132,7 +225,13 @@ param(
     [string]$LandingFile,
 
     [Parameter()]
-    [switch]$SkipLanding
+    [switch]$SkipLanding,
+
+    [Parameter()]
+    [switch]$Prompt,
+
+    [Parameter()]
+    [switch]$NoPrompt
 )
 
 $ErrorActionPreference = 'Stop'
@@ -159,63 +258,287 @@ if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'template.html'))) {
     $repoRoot = $scriptDir
 }
 
-if (-not $TemplateFile) {
-    $TemplateFile = Join-Path $repoRoot 'template.html'
+# ---------------------------------------------------------------------------
+# Default folder for the snapshots and for the results
+# ---------------------------------------------------------------------------
+# The collection is expected to live in $DefaultDir and both artifacts are
+# written back there, so with the data in place the script needs no arguments
+# at all. Every parameter still overrides this, and when no snapshot is found
+# in $DefaultDir the script asks for the files one at a time rather than
+# failing outright.
+
+$DefaultDir              = 'D:\entertainment\collecting\snap2html_directory_listing'
+$DefaultInputName        = 'Movies_*.html'
+$DefaultOutputName       = 'search_movies.html'
+$DefaultLandingName      = 'index.html'
+$TemplateFileName        = 'template.html'
+$LandingTemplateFileName = 'landing_template.html'
+
+# Folders searched for the two templates, best first. The tool's own copies
+# win, then $DefaultDir (so templates kept beside the data work too), then
+# wherever the script was invoked from.
+$searchDirs = New-Object System.Collections.Generic.List[string]
+foreach ($d in @($scriptDir, $repoRoot, $DefaultDir, (Get-Location).Path)) {
+    if ($d -and ($searchDirs -notcontains $d)) { $searchDirs.Add($d) }
 }
-$TemplateFile = Resolve-ExistingFile -Path $TemplateFile -What 'template'
+$searchDirsText = ($searchDirs.ToArray() -join '; ')
+
+function Find-FirstFile {
+    param([Parameter(Mandatory = $true)][string]$Name, [string[]]$Dirs)
+    foreach ($d in $Dirs) {
+        if (-not $d) { continue }
+        $candidate = Join-Path $d $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+    return $null
+}
+
+function Read-Line {
+    # Read-Host throws when the host has no interactive UI (a service, some CI
+    # runners). Turn that into something the user can act on.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$PromptText)
+    try {
+        return Read-Host $PromptText
+    }
+    catch {
+        throw ('Interactive prompts are not available in this host. Pass the files explicitly instead: allmovies.ps1 -InputFiles "{0}\{1}" -OutputFile "<path>"' -f $DefaultDir, $DefaultInputName)
+    }
+}
+
+function Resolve-InputEntry {
+    # Accepts a file, a folder (its Movies_*.html files are used) or a
+    # wildcard path, and returns the full paths of the files it refers to.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Entry)
+
+    $entry = $Entry.Trim().Trim('"').Trim("'").Trim()
+    if ($entry.Length -eq 0) { return @() }
+
+    $items = @()
+    try {
+        if ($entry -match '[\*\?\[\]]') {
+            $items = @(Get-ChildItem -Path $entry -File -ErrorAction Stop |
+                Where-Object { $_.Extension -ieq '.html' } |
+                Sort-Object -Property Name)
+            if ($items.Count -eq 0) { Write-Warning ('    no files match {0}' -f $entry) }
+        }
+        elseif (Test-Path -LiteralPath $entry -PathType Container) {
+            $items = @(Get-ChildItem -LiteralPath $entry -File -Filter $DefaultInputName -ErrorAction Stop |
+                Sort-Object -Property Name)
+            if ($items.Count -eq 0) {
+                # Nothing matched the usual name: accept any other snapshot in
+                # the folder, but never one of our own artifacts.
+                $items = @(Get-ChildItem -LiteralPath $entry -File -Filter '*.html' -ErrorAction Stop |
+                    Where-Object { $_.Name -ine $DefaultOutputName -and $_.Name -ine $DefaultLandingName } |
+                    Sort-Object -Property Name)
+            }
+            if ($items.Count -eq 0) { Write-Warning ('    no snapshot files in {0}' -f $entry) }
+        }
+        elseif (Test-Path -LiteralPath $entry -PathType Leaf) {
+            $items = @(Get-Item -LiteralPath $entry)
+        }
+        else {
+            Write-Warning ('    not found: {0}' -f $entry)
+            return @()
+        }
+    }
+    catch {
+        Write-Warning ('    could not read {0} ({1})' -f $entry, $_.Exception.Message)
+        return @()
+    }
+
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($item in $items) { $out.Add($item.FullName) }
+    return $out.ToArray()
+}
+
+function Request-InputFiles {
+    # Ask for the snapshots one at a time until the user says they are done.
+    param([string]$SearchDir, [string[]]$Initial = @())
+
+    $found = New-Object System.Collections.Generic.List[string]
+    foreach ($i in @($Initial)) {
+        if ($i -and ($found -notcontains $i)) { $found.Add($i) }
+    }
+
+    Write-Host ''
+    if ($found.Count -gt 0) {
+        Write-Host ('Found {0} snapshot(s) in:' -f $found.Count)
+        Write-Host ('  {0}' -f $SearchDir)
+        foreach ($f in $found) { Write-Host ('    {0}' -f $f) }
+        Write-Host ''
+        Write-Host 'Press Enter to use these, or type more paths to add to them.'
+    }
+    else {
+        Write-Host ('No {0} snapshots were found in:' -f $DefaultInputName) -ForegroundColor Yellow
+        Write-Host ('  {0}' -f $SearchDir) -ForegroundColor Yellow
+        if (-not (Test-Path -LiteralPath $SearchDir)) {
+            Write-Host '  (that folder does not exist)' -ForegroundColor Yellow
+        }
+    }
+    Write-Host ''
+    Write-Host 'Enter the snapshots to merge, one per line. Each line may be a file,'
+    Write-Host ('a folder (its {0} files are used), or a wildcard path.' -f $DefaultInputName)
+    Write-Host 'Type "list" to review what you have entered, "clear" to start over.'
+    Write-Host 'Press Enter on an empty line, or type "done", when you are finished.'
+
+    while ($true) {
+        Write-Host ''
+        $label = if ($found.Count -gt 0) { '  next input ({0} so far)>' -f $found.Count } else { '  first input>' }
+        $line = Read-Line $label
+        if ($null -eq $line) { break }
+
+        $t = $line.Trim().Trim('"').Trim("'").Trim()
+        if ($t.Length -eq 0) { break }
+        if ($t -imatch '^(done|finish|quit|exit|q)$') { break }
+
+        if ($t -imatch '^(list|ls)$') {
+            if ($found.Count -eq 0) { Write-Host '    (nothing collected yet)' }
+            $k = 0
+            foreach ($f in $found) { $k++; Write-Host ('    {0,2}. {1}' -f $k, $f) }
+            continue
+        }
+        if ($t -imatch '^(clear|reset)$') {
+            $found.Clear()
+            Write-Host '    cleared - start again'
+            continue
+        }
+
+        $got = @(Resolve-InputEntry $t)
+        if ($got.Count -eq 0) {
+            Write-Host '    nothing added; try again, or press Enter to finish' -ForegroundColor Yellow
+            continue
+        }
+        $added = 0
+        foreach ($g in $got) {
+            if ($found -notcontains $g) { $found.Add($g); $added++ }
+        }
+        if     ($added -eq 1) { Write-Host ('    + {0}' -f $got[0]) }
+        elseif ($added -eq 0) { Write-Host '    already in the list' }
+        else                  { Write-Host ('    + {0} files' -f $added) }
+    }
+
+    if ($found.Count -eq 0) { return @() }
+    Write-Host ''
+    Write-Host ('Using {0} input file(s):' -f $found.Count)
+    $k = 0
+    foreach ($f in $found) { $k++; Write-Host ('  {0,2}. {1}' -f $k, $f) }
+    return $found.ToArray()
+}
+
+function Request-OutputFile {
+    # The secondary question: where the merged snapshot should be written.
+    param([Parameter(Mandatory = $true)][string]$Suggested)
+
+    Write-Host ''
+    $line = Read-Line ('Output file name and location [{0}]' -f $Suggested)
+    if ($null -eq $line) { return $Suggested }
+    $t = $line.Trim().Trim('"').Trim("'").Trim()
+    if ($t.Length -eq 0) { return $Suggested }
+    # A bare file name keeps the suggested folder.
+    if ($t -notmatch '[\\/:]') { $t = Join-Path (Split-Path -Parent $Suggested) $t }
+    return $t
+}
+
+# ---------------------------------------------------------------------------
+# Inputs: search the default folder, and ask when nothing is there
+# ---------------------------------------------------------------------------
+
+$askedForInputs = $false
+$resolvedInputs = New-Object System.Collections.Generic.List[string]
+
+if ($PSBoundParameters.ContainsKey('InputFiles') -and @($InputFiles).Count -gt 0) {
+    # Named on the command line: use exactly those, and never prompt.
+    foreach ($spec in $InputFiles) {
+        $got = @(Resolve-InputEntry $spec)
+        if ($got.Count -eq 0) { throw ('no snapshot files match: {0}' -f $spec) }
+        foreach ($g in $got) {
+            if ($resolvedInputs -notcontains $g) { $resolvedInputs.Add($g) }
+        }
+    }
+}
+else {
+    if (Test-Path -LiteralPath $DefaultDir -PathType Container) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $DefaultDir -File -Filter $DefaultInputName |
+                         Sort-Object -Property Name)) {
+            $resolvedInputs.Add($f.FullName)
+        }
+    }
+
+    if ($resolvedInputs.Count -gt 0 -and -not $Prompt) {
+        Write-Host ('Found {0} snapshot(s) in {1}' -f $resolvedInputs.Count, $DefaultDir)
+    }
+
+    if ($resolvedInputs.Count -eq 0 -or $Prompt) {
+        if ($NoPrompt) {
+            throw ('no {0} snapshots found in {1} and -NoPrompt was given; pass -InputFiles explicitly' -f $DefaultInputName, $DefaultDir)
+        }
+        $askedForInputs = $true
+        $collected = @(Request-InputFiles -SearchDir $DefaultDir -Initial $resolvedInputs.ToArray())
+        $resolvedInputs = New-Object System.Collections.Generic.List[string]
+        foreach ($c in $collected) { $resolvedInputs.Add($c) }
+    }
+}
+
+if ($resolvedInputs.Count -lt 1) {
+    throw ('no input snapshot files to merge (looked in {0})' -f $DefaultDir)
+}
+
+# ---------------------------------------------------------------------------
+# Outputs: the default folder, unless overridden or asked
+# ---------------------------------------------------------------------------
+
+$outDir = $DefaultDir
+if (-not (Test-Path -LiteralPath $outDir)) {
+    $drive = [System.IO.Path]::GetPathRoot($outDir)
+    if (-not ($drive -and (Test-Path -LiteralPath $drive))) {
+        # No such drive on this machine - keep the results beside the inputs.
+        $outDir = Split-Path -Parent $resolvedInputs[0]
+        Write-Warning ('default output folder {0} is unavailable; using {1}' -f $DefaultDir, $outDir)
+    }
+}
 
 if (-not $OutputFile) {
-    $OutputFile = Join-Path $scriptDir 'search_movies.html'
+    $OutputFile = Join-Path $outDir $DefaultOutputName
+    if ($askedForInputs -or $Prompt) {
+        $OutputFile = Request-OutputFile -Suggested $OutputFile
+    }
 }
 $OutputFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputFile)
 
-# Landing page: landing_template.html in the repo root -> index.html.
+# Landing page: landing_template.html -> index.html next to the snapshot.
 # It embeds the very same folder data, so the two artifacts cannot drift.
 $buildLanding = -not $SkipLanding
 if ($buildLanding) {
     if (-not $LandingTemplate) {
-        $LandingTemplate = Join-Path $repoRoot 'landing_template.html'
+        $LandingTemplate = Find-FirstFile -Name $LandingTemplateFileName -Dirs $searchDirs.ToArray()
     }
-    if (Test-Path -LiteralPath $LandingTemplate -PathType Leaf) {
+    if ($LandingTemplate -and (Test-Path -LiteralPath $LandingTemplate -PathType Leaf)) {
         $LandingTemplate = (Resolve-Path -LiteralPath $LandingTemplate).Path
-        if (-not $LandingFile) { $LandingFile = Join-Path $repoRoot 'index.html' }
+        if (-not $LandingFile) {
+            $LandingFile = Join-Path (Split-Path -Parent $OutputFile) $DefaultLandingName
+        }
         $LandingFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LandingFile)
     }
     elseif ($PSBoundParameters.ContainsKey('LandingTemplate')) {
         throw ('landing template not found: {0}' -f $LandingTemplate)
     }
     else {
-        Write-Warning ('landing template not found ({0}); skipping the landing page' -f $LandingTemplate)
+        Write-Warning ('landing template {0} not found (searched {1}); skipping the landing page' -f $LandingTemplateFileName, $searchDirsText)
         $buildLanding = $false
     }
 }
 
-# Default inputs: every Movies_*.html next to this script, except the output.
-if (-not $InputFiles -or $InputFiles.Count -eq 0) {
-    $InputFiles = @(Join-Path $scriptDir 'Movies_*.html')
-}
-
-$resolvedInputs = New-Object System.Collections.Generic.List[string]
-foreach ($spec in $InputFiles) {
-    if ($spec -match '[\*\?\[\]]') {
-        # Expand wildcards the way a user would expect on the command line.
-        $matches2 = @(Get-ChildItem -Path $spec -File -ErrorAction SilentlyContinue |
-            Sort-Object -Property Name)
-        if ($matches2.Count -eq 0) {
-            throw ('no snapshot files match: {0}' -f $spec)
-        }
-        foreach ($m in $matches2) { $resolvedInputs.Add($m.FullName) }
-    }
-    else {
-        $resolvedInputs.Add((Resolve-ExistingFile -Path $spec -What 'input snapshot'))
-    }
-}
-
-# Never merge our own output back in (it can match Movies_*.html if renamed).
+# Never merge one of our own artifacts back in (a renamed output can match
+# Movies_*.html, and a folder answer can pick up index.html).
 $fullOut = [System.IO.Path]::GetFullPath($OutputFile)
+$fullLanding = if ($buildLanding) { [System.IO.Path]::GetFullPath($LandingFile) } else { '' }
 $cleaned = New-Object System.Collections.Generic.List[string]
 foreach ($p in $resolvedInputs) {
-    if ([System.IO.Path]::GetFullPath($p) -ieq $fullOut) { continue }
+    $fp = [System.IO.Path]::GetFullPath($p)
+    if ($fp -ieq $fullOut) { continue }
+    if ($fullLanding -and ($fp -ieq $fullLanding)) { continue }
     if ($cleaned -notcontains $p) { $cleaned.Add($p) }
 }
 $resolvedInputs = $cleaned
@@ -223,6 +546,18 @@ $resolvedInputs = $cleaned
 if ($resolvedInputs.Count -lt 1) {
     throw 'at least one input snapshot file is required'
 }
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+
+if (-not $TemplateFile) {
+    $TemplateFile = Find-FirstFile -Name $TemplateFileName -Dirs $searchDirs.ToArray()
+}
+if (-not $TemplateFile) {
+    throw ('{0} was not found (searched {1}); pass -TemplateFile <path>' -f $TemplateFileName, $searchDirsText)
+}
+$TemplateFile = Resolve-ExistingFile -Path $TemplateFile -What 'template'
 
 if ([string]::IsNullOrWhiteSpace($Title)) {
     throw 'Title must be a non-empty string'

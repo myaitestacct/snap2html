@@ -21,12 +21,67 @@ per-drive movie snapshots (`Movies_I.html` … `Movies_N.html`, one per drive
 `landing_template.html` from the *same* folder data to produce `index.html`:
 
 ```powershell
-.\movies\allmovies.ps1
+.\allmovies.ps1
 
 # equivalent, with explicit paths
-.\movies\allmovies.ps1 movies\Movies_*.html `
+.\allmovies.ps1 movies\Movies_*.html `
     -OutputFile movies\search_movies.html -TemplateFile template.html -Title Movies
 ```
+
+### Default folder, and asking when it is empty
+
+With no arguments the script looks in
+
+```
+D:\entertainment\collecting\snap2html_directory_listing
+```
+
+for `Movies_*.html`, and writes `search_movies.html` **and** `index.html` back
+into that same folder. Change `$DefaultDir` near the top of the script to point
+it somewhere else permanently.
+
+If no snapshots are found there it **asks** rather than failing:
+
+```
+No Movies_*.html snapshots were found in:
+  D:\entertainment\collecting\snap2html_directory_listing
+  (that folder does not exist)
+
+Enter the snapshots to merge, one per line. Each line may be a file,
+a folder (its Movies_*.html files are used), or a wildcard path.
+Type "list" to review what you have entered, "clear" to start over.
+Press Enter on an empty line, or type "done", when you are finished.
+
+  first input> E:\backups\Movies_I.html
+    + E:\backups\Movies_I.html
+  next input (1 so far)> E:\backups\old drives
+    + 5 files
+  next input (6 so far)> done
+
+Using 6 input file(s):
+   1. E:\backups\Movies_I.html
+   ...
+
+Output file name and location [D:\...\search_movies.html]>
+```
+
+Each answer is checked as it is typed: a path that matches nothing is reported
+and asked again instead of being silently skipped, and duplicates are ignored.
+The output question is the second, optional one — press Enter to accept the
+bracketed default, type a bare file name to keep that folder, or type a full
+path to put the results somewhere else. `index.html` always lands beside
+whatever you choose.
+
+- Explicit `-InputFiles` / `-OutputFile` always win, so nothing is prompted
+  for and the script stays usable from a scheduler or another script.
+- `-NoPrompt` turns the questions into an error, for unattended runs.
+- `-Prompt` asks even when snapshots *were* found, showing them as the
+  starting list so you can add to them.
+- If the default folder's drive is missing entirely, results are written next
+  to the first input file instead, with a warning.
+- `template.html` and `landing_template.html` are looked for in the script's
+  folder, then the repository root, then the default folder, then the current
+  directory — so the script also works when copied next to the data.
 
 - The drive roots are **dropped** and every `movies_NN_*` folder from every
   input is listed directly under a synthetic root named `Movies`. The page
@@ -52,7 +107,16 @@ per-drive movie snapshots (`Movies_I.html` … `Movies_N.html`, one per drive
 If script execution is blocked by policy:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\movies\allmovies.ps1
+powershell -ExecutionPolicy Bypass -File .\allmovies.ps1
+```
+
+Rebuilding the two artifacts committed in *this* repository (which live in
+`movies/` and at the repo root rather than in `$DefaultDir`) means passing the
+paths explicitly:
+
+```powershell
+.\movies\allmovies.ps1 movies\Movies_*.html -OutputFile movies\search_movies.html `
+    -LandingFile index.html -TemplateFile template.html -LandingTemplate landing_template.html
 ```
 
 ## index.html — the landing page
