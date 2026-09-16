@@ -6,21 +6,21 @@ Tools for working with [Snap2HTML](http://www.rlvision.com) folder-snapshot file
   current file format).
 - `merge_snap2html.ps1` / `merge_snap2html.py` — general-purpose mergers for
   two or more snapshots (keeps each input's own root folder).
-- `movies/consolidate_movies.ps1` — flatten every `movies/Movies_*.html`
+- `movies/allmovies.ps1` — flatten every `movies/Movies_*.html`
   snapshot under a single `Movies` root into `movies/search_movies.html`,
   filling `template.html`.
 
-## consolidate_movies.ps1
+## allmovies.ps1
 
-`movies/consolidate_movies.ps1` builds a **single-root** V2 snapshot from the
+`movies/allmovies.ps1` builds a **single-root** V2 snapshot from the
 per-drive movie snapshots (`Movies_I.html` … `Movies_N.html`, one per drive
 `I:\` … `N:\`) by filling `template.html`:
 
 ```powershell
-.\movies\consolidate_movies.ps1
+.\movies\allmovies.ps1
 
 # equivalent, with explicit paths
-.\movies\consolidate_movies.ps1 movies\Movies_*.html `
+.\movies\allmovies.ps1 movies\Movies_*.html `
     -OutputFile movies\search_movies.html -TemplateFile template.html -Title Movies
 ```
 
@@ -44,7 +44,7 @@ per-drive movie snapshots (`Movies_I.html` … `Movies_N.html`, one per drive
 If script execution is blocked by policy:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\movies\consolidate_movies.ps1
+powershell -ExecutionPolicy Bypass -File .\movies\allmovies.ps1
 ```
 
 ## merge_snap2html.ps1
