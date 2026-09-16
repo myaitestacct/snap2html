@@ -37,8 +37,17 @@ D:\entertainment\collecting\snap2html_directory_listing
 ```
 
 for `Movies_*.html`, and writes `search_movies.html` **and** `index.html` back
-into that same folder. Change `$DefaultDir` near the top of the script to point
-it somewhere else permanently.
+into that same folder. The two templates are read from its `Snap2HTML`
+subfolder. Change `$DefaultDir` / `$DefaultTemplateDir` near the top of the
+script to point them elsewhere permanently, or pass `-TemplateDir` per run.
+
+> **Note** — `-Name` on the internal `Find-FirstFile` helper takes a *bare file
+> name* (`template.html`), never a path; the folders to search come from
+> `-Dirs`. Beware `$dir.$name` when editing this: in PowerShell `.` is
+> **property access**, not concatenation, so it asks a string for a property
+> called `template.html` and yields `$null`, which surfaces as *"Cannot bind
+> argument to parameter 'Name' because it is an empty string"*. Build a path
+> with `Join-Path $dir $name`, or add the folder to the search list.
 
 If no snapshots are found there it **asks** rather than failing:
 
@@ -79,9 +88,12 @@ whatever you choose.
   starting list so you can add to them.
 - If the default folder's drive is missing entirely, results are written next
   to the first input file instead, with a warning.
-- `template.html` and `landing_template.html` are looked for in the script's
-  folder, then the repository root, then the default folder, then the current
-  directory — so the script also works when copied next to the data.
+- `template.html` and `landing_template.html` are looked for in
+  `D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML`
+  (`$DefaultTemplateDir`, overridable with `-TemplateDir`) **first**, then in
+  the script's folder, the repository root, the collection folder and the
+  current directory — so the script works whether the templates sit beside the
+  data or beside the script. A trailing separator on the folder is fine.
 
 - The drive roots are **dropped** and every `movies_NN_*` folder from every
   input is listed directly under a synthetic root named `Movies`. The page

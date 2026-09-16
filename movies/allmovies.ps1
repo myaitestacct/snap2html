@@ -72,6 +72,12 @@
     script stays fully scriptable. -NoPrompt disables the questions for
     unattended runs, and -Prompt asks them even when snapshots were found.
 
+    The two templates are looked for in
+    D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML first
+    (-TemplateDir), then in this script's folder, the repository root, the
+    collection folder and the current directory - so the script works whether
+    the templates sit beside the data or beside the script.
+
     Works with Windows PowerShell 5.1 and PowerShell 7+.
 
 .PARAMETER InputFiles
@@ -92,11 +98,18 @@
     shown in brackets (Enter accepts it). The folder is created if needed,
     unless its drive is missing - then results go next to the first input.
 
+.PARAMETER TemplateDir
+    Folder that holds the two templates. Default:
+    D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML
+    A trailing separator is optional. This folder is searched first, so it
+    wins over copies found elsewhere; -TemplateFile and -LandingTemplate
+    override an individual file outright.
+
 .PARAMETER TemplateFile
     Snap2HTML 2.5 template.html to fill. Default: the first template.html
-    found in this script's folder, then the repository root, then the default
-    folder above, then the current directory. A missing template is an error,
-    since nothing can be produced without it.
+    found in -TemplateDir, then this script's folder, then the repository
+    root, then the default collection folder, then the current directory. A
+    missing template is an error, since nothing can be produced without it.
 
 .PARAMETER Title
     Name of the synthetic root folder and of the page title. Default: Movies.
@@ -111,9 +124,9 @@
 
 .PARAMETER LandingTemplate
     Landing page template to fill. Default: the first landing_template.html
-    found in the same folders as -TemplateFile. If it is missing the landing
-    page is skipped with a warning (pass the parameter explicitly to make
-    that an error instead).
+    found in the same folders as -TemplateFile, so -TemplateDir covers it too.
+    If it is missing the landing page is skipped with a warning (pass the
+    parameter explicitly to make that an error instead).
 
 .PARAMETER LandingFile
     Destination landing page. Default: index.html in the same folder as the
@@ -181,6 +194,11 @@
     Same, but keeps stray drive-root files instead of discarding them.
 
 .EXAMPLE
+    PS> .\allmovies.ps1 -TemplateDir C:\tools\Snap2HTML
+
+    Take template.html and landing_template.html from another folder.
+
+.EXAMPLE
     PS> .\allmovies.ps1 -SkipLanding
 
     Rebuild only search_movies.html, leaving index.html alone.
@@ -217,6 +235,9 @@ param(
 
     [Parameter()]
     [switch]$KeepOrder,
+
+    [Parameter()]
+    [string]$TemplateDir,
 
     [Parameter()]
     [string]$LandingTemplate,
@@ -268,23 +289,44 @@ if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'template.html'))) {
 # failing outright.
 
 $DefaultDir              = 'D:\entertainment\collecting\snap2html_directory_listing'
+$DefaultTemplateDir      = 'D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML'
 $DefaultInputName        = 'Movies_*.html'
 $DefaultOutputName       = 'search_movies.html'
 $DefaultLandingName      = 'index.html'
 $TemplateFileName        = 'template.html'
 $LandingTemplateFileName = 'landing_template.html'
 
-# Folders searched for the two templates, best first. The tool's own copies
-# win, then $DefaultDir (so templates kept beside the data work too), then
-# wherever the script was invoked from.
+# Folders searched for the two templates, best first. An explicitly designated
+# template folder wins, then the tool's own copies, then $DefaultDir (templates
+# kept beside the data), then wherever the script was invoked from. Reorder the
+# list below to change that priority.
+if (-not $TemplateDir) { $TemplateDir = $DefaultTemplateDir }
+if ($TemplateDir -and $TemplateDir.Length -gt 3) {
+    # Tolerate a trailing separator: Join-Path would otherwise be fine with it,
+    # but the de-duplication below compares literal strings.
+    $TemplateDir = $TemplateDir.TrimEnd([char[]]@('\', '/'))
+}
+
 $searchDirs = New-Object System.Collections.Generic.List[string]
-foreach ($d in @($scriptDir, $repoRoot, $DefaultDir, (Get-Location).Path)) {
+foreach ($d in @($TemplateDir, $scriptDir, $repoRoot, $DefaultDir, (Get-Location).Path)) {
     if ($d -and ($searchDirs -notcontains $d)) { $searchDirs.Add($d) }
 }
 $searchDirsText = ($searchDirs.ToArray() -join '; ')
 
 function Find-FirstFile {
-    param([Parameter(Mandatory = $true)][string]$Name, [string[]]$Dirs)
+    # -Name is a BARE FILE NAME ('template.html'), never a path: the folders to
+    # look in come from -Dirs, and each is combined with Join-Path.
+    #
+    # Beware the PowerShell gotcha that produces "Cannot bind argument to
+    # parameter 'Name' because it is an empty string": $a.$b is PROPERTY ACCESS,
+    # not concatenation, so '$dir.$name' asks a string for a property called
+    # 'template.html' and yields $null. To build a path use
+    # (Join-Path $dir $name) or "$dir\$name"; to search another folder add it
+    # to -Dirs (or pass -TemplateDir).
+    param([string]$Name, [string[]]$Dirs)
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        throw ('Find-FirstFile: -Name must be a bare file name such as {0}, not a path and not empty. To search another folder, add it to $searchDirs or pass -TemplateDir; to build a path, use (Join-Path $dir $name).' -f $TemplateFileName)
+    }
     foreach ($d in $Dirs) {
         if (-not $d) { continue }
         $candidate = Join-Path $d $Name
