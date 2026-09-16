@@ -39,5 +39,5 @@ pass it) by filling `template.html`:
 If script execution is blocked by policy:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\shows\consolidate_shows.ps1
+powershell -ExecutionPolicy Bypass -File .\shows\merge_snap2html.ps1
 ```
