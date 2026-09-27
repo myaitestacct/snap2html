@@ -22,17 +22,45 @@
     ([PAGE TITLE], [DIR DATA], [NUM FILES], ...), not by rewriting one of
     the inputs. Works with Windows PowerShell 5.1 and PowerShell 7+.
 
+    LOCATIONS
+
+    The script is location independent: it may be started from any current
+    directory and its own location does not matter. By default every file
+    it works with lives in the data directory
+
+        D:\entertainment\collecting\snap2html_directory_listing
+
+    (the input snapshots and the output), and the template is
+
+        D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML\template.html
+
+    Relative -InputFiles, -OutputFile and -TemplateFile values are resolved
+    against the data directory, never against the current directory.
+    Absolute paths are used as given.
+
+    Before anything is read or written the script verifies that the data
+    directory, every input snapshot and the template exist. If not, it stops
+    with a 'File(s) not found' error that lists every missing file.
+
 .PARAMETER InputFiles
-    Snapshot files to consolidate. Defaults to shows-A_2_R.html and
-    shows-S_2_Z.html next to this script.
+    Snapshot files to consolidate. Relative names are looked up in -DataDir.
+    Default: shows-A_2_R.html and shows-S_2_Z.html in -DataDir.
 
 .PARAMETER OutputFile
-    Destination HTML file. Default: shows.html next to this script
-    (or in the current directory if the script is not in a 'shows' folder).
+    Destination HTML file. Relative names are placed in -DataDir.
+    Default: shows.html in -DataDir.
 
 .PARAMETER TemplateFile
-    Snap2HTML 2.5 template.html to fill. Default: template.html in the
-    repository root (parent of this script's folder).
+    Snap2HTML 2.5 template.html to fill. A directory is accepted and means
+    'template.html inside that directory'. Relative values are resolved
+    against -DataDir.
+    Default: Snap2HTML\template.html in -DataDir, i.e.
+    D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML\template.html
+
+.PARAMETER DataDir
+    Directory that holds the input snapshots and the output, and whose
+    Snap2HTML subfolder holds template.html.
+    Default: D:\entertainment\collecting\snap2html_directory_listing
 
 .PARAMETER Title
     Name of the synthetic root folder and of the page title. Default: Shows.
@@ -42,17 +70,27 @@
     re-sorting the combined top-level listing.
 
 .EXAMPLE
-    PS> .\shows\consolidate_shows.ps1
+    PS C:\anywhere> & 'C:\scripts\consolidate_shows.ps1'
 
-    Consolidates shows\shows-A_2_R.html and shows\shows-S_2_Z.html into
-    shows\shows.html with root/title 'Shows'.
+    Consolidates shows-A_2_R.html and shows-S_2_Z.html from
+    D:\entertainment\collecting\snap2html_directory_listing into shows.html
+    in the same directory, using
+    D:\entertainment\collecting\snap2html_directory_listing\Snap2HTML\template.html.
 
 .EXAMPLE
-    PS> .\shows\consolidate_shows.ps1 -OutputFile shows\shows.html -Title Shows
+    PS C:\anywhere> & 'C:\scripts\consolidate_shows.ps1' shows-A_2_R.html shows-S_2_Z.html -o shows.html
+
+    Same as above with the file names spelled out; relative names are
+    looked up in the data directory.
+
+.EXAMPLE
+    PS C:\anywhere> & 'C:\scripts\consolidate_shows.ps1' -DataDir 'E:\listing' -TemplateFile 'E:\tools\Snap2HTML'
+
+    Uses another data directory and the template.html found in E:\tools\Snap2HTML.
 
 .NOTES
     If script execution is blocked by policy, run it with:
-    powershell -ExecutionPolicy Bypass -File .\shows\consolidate_shows.ps1
+    powershell -ExecutionPolicy Bypass -File "C:\scripts\consolidate_shows.ps1"
 #>
 [CmdletBinding()]
 param(
@@ -67,6 +105,9 @@ param(
     [string]$TemplateFile,
 
     [Parameter()]
+    [string]$DataDir = 'D:\entertainment\collecting\snap2html_directory_listing',
+
+    [Parameter()]
     [string]$Title = 'Shows',
 
     [Parameter()]
@@ -78,52 +119,97 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+# The script is started from an unrelated directory, so neither the current
+# directory nor the script's own folder is used for defaults:
+#   - input snapshots and the output live in $DataDir
+#   - the template is $DataDir\Snap2HTML\template.html
+# Relative -InputFiles / -OutputFile / -TemplateFile values are anchored at
+# $DataDir; absolute paths are used as given.
 
-function Resolve-ExistingFile {
-    param([Parameter(Mandatory = $true)][string]$Path, [string]$What)
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw ('{0} not found: {1}' -f $What, $Path)
-    }
-    return (Resolve-Path -LiteralPath $Path).Path
-}
+$DefaultInputNames = @('shows-A_2_R.html', 'shows-S_2_Z.html')
+$DefaultOutputName = 'shows.html'
+$TemplateSubDir    = 'Snap2HTML'
+$TemplateName      = 'template.html'
 
-# $PSScriptRoot is the script's folder (not the caller's) on PS 3+.
-$scriptDir = $PSScriptRoot
-if (-not $scriptDir) {
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-}
-$repoRoot  = Split-Path -Parent $scriptDir
-if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'template.html'))) {
-    $repoRoot = $scriptDir
-}
-
-if (-not $TemplateFile) {
-    $TemplateFile = Join-Path $repoRoot 'template.html'
-}
-$TemplateFile = Resolve-ExistingFile -Path $TemplateFile -What 'template'
-
-if (-not $InputFiles -or $InputFiles.Count -eq 0) {
-    $InputFiles = @(
-        (Join-Path $scriptDir 'shows-A_2_R.html'),
-        (Join-Path $scriptDir 'shows-S_2_Z.html')
+function Get-AbsolutePath {
+    # Absolute, normalized path for $Path. Relative paths are anchored at
+    # $BaseDir (never at the current directory). The path need not exist.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$BaseDir
     )
+    if (-not [System.IO.Path]::IsPathRooted($Path)) {
+        $Path = Join-Path $BaseDir $Path
+    }
+    return [System.IO.Path]::GetFullPath($Path)
+}
+
+# Data directory: an explicitly given relative -DataDir is the only value
+# that is interpreted relative to the caller's current directory.
+if (-not [System.IO.Path]::IsPathRooted($DataDir)) {
+    $DataDir = Join-Path (Get-Location -PSProvider FileSystem).ProviderPath $DataDir
+}
+$DataDir = [System.IO.Path]::GetFullPath($DataDir)
+if (-not (Test-Path -LiteralPath $DataDir -PathType Container)) {
+    throw ('File(s) not found: data directory {0} does not exist (it should hold the snapshot files; use -DataDir to point elsewhere)' -f $DataDir)
+}
+
+# Template: default $DataDir\Snap2HTML\template.html. A directory given via
+# -TemplateFile means 'template.html inside that directory'.
+if (-not $TemplateFile) {
+    $TemplateFile = Join-Path (Join-Path $DataDir $TemplateSubDir) $TemplateName
+}
+else {
+    $TemplateFile = Get-AbsolutePath -Path $TemplateFile -BaseDir $DataDir
+    if (Test-Path -LiteralPath $TemplateFile -PathType Container) {
+        $TemplateFile = Join-Path $TemplateFile $TemplateName
+    }
+}
+
+# Inputs: default shows-A_2_R.html and shows-S_2_Z.html in $DataDir.
+if (-not $InputFiles -or $InputFiles.Count -eq 0) {
+    $InputFiles = $DefaultInputNames
 }
 if ($InputFiles.Count -lt 2) {
     throw 'at least two input snapshot files are required'
 }
 $resolvedInputs = @()
 foreach ($p in $InputFiles) {
-    $resolvedInputs += (Resolve-ExistingFile -Path $p -What 'input snapshot')
+    $resolvedInputs += (Get-AbsolutePath -Path $p -BaseDir $DataDir)
 }
 
+# Output: default shows.html in $DataDir.
 if (-not $OutputFile) {
-    $OutputFile = Join-Path $scriptDir 'shows.html'
+    $OutputFile = $DefaultOutputName
 }
-$OutputFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputFile)
+$OutputFile = Get-AbsolutePath -Path $OutputFile -BaseDir $DataDir
+foreach ($p in $resolvedInputs) {
+    if ([string]::Equals($p, $OutputFile, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw ('output file must not be one of the input snapshots: {0}' -f $OutputFile)
+    }
+}
+
+# Every file this run depends on must exist. Check them all up front and
+# report every missing one in a single error.
+$missing = New-Object System.Collections.Generic.List[string]
+foreach ($p in $resolvedInputs) {
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+        $missing.Add(('input snapshot: {0}' -f $p))
+    }
+}
+if (-not (Test-Path -LiteralPath $TemplateFile -PathType Leaf)) {
+    $missing.Add(('template:       {0}' -f $TemplateFile))
+}
+if ($missing.Count -gt 0) {
+    throw ("File(s) not found:`n  " + ($missing -join "`n  "))
+}
 
 if ([string]::IsNullOrWhiteSpace($Title)) {
     throw 'Title must be a non-empty string'
 }
+
+Write-Host ('Data directory: {0}' -f $DataDir)
+Write-Host ('Template:       {0}' -f $TemplateFile)
 
 # ---------------------------------------------------------------------------
 # Helpers (Snap2HTML 2.5 encoding / formatting)
